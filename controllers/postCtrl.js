@@ -2,16 +2,16 @@ const Posts = require("../models/postModel");
 const Comments = require("../models/commentModel");
 const Users = require("../models/userModel");
 
-class APIfeatures  {
-  constructor(query, queryString){
+class APIfeatures {
+  constructor(query, queryString) {
     this.query = query;
     this.queryString = queryString;
   }
 
-  paginating(){
-    const page = this.queryString.page * 1 || 1; 
+  paginating() {
+    const page = this.queryString.page * 1 || 1;
     const limit = this.queryString.limit * 1 || 9;
-    const skip = (page -1) * limit; 
+    const skip = (page - 1) * limit;
     this.query = this.query.skip(skip).limit(limit);
     return this;
   }
@@ -20,25 +20,48 @@ class APIfeatures  {
 const postCtrl = {
   createPost: async (req, res) => {
     try {
-      const { content, images } = req.body;
+      const { content, images, status, scheduledDate, isDraft } = req.body;
 
-      if (images.length === 0) {
+      if (images.length === 0 && !isDraft) {
         return res.status(400).json({ msg: "Please add photo(s)" });
+      }
+
+      if (status === 'scheduled') {
+        if (!scheduledDate) {
+          return res.status(400).json({ msg: "Please provide scheduled date." });
+        }
+
+        const scheduleDate = new Date(scheduledDate);
+        if (scheduleDate <= new Date()) {
+          return res.status(400).json({ msg: "Scheduled date must be in the future." });
+        }
       }
 
       const newPost = new Posts({
         content,
         images,
         user: req.user._id,
+        status: status || 'published',
+        isDraft: isDraft || false,
+        scheduledDate: scheduledDate ? new Date(scheduledDate) : null,
+        publishedAt: status === 'published' ? new Date() : null
       });
+      
       await newPost.save();
 
-      res.json({ 
-        msg: "Post created successfully.", 
+      let message = "Post created successfully.";
+      if (status === 'scheduled') {
+        message = "Post scheduled successfully.";
+      } else if (isDraft) {
+        message = "Draft saved successfully.";
+      }
+
+      res.json({
+        msg: message,
         newPost: {
           ...newPost._doc,
-          user: req.user
-        } 
+          user: req.user,
+        },
       });
     } catch (err) {
       return res.status(500).json({ msg: err.message });
@@ -50,9 +73,12 @@ const postCtrl = {
       const features = new APIfeatures(
         Posts.find({
           user: [...req.user.following, req.user._id],
+          status: 'published', 
+          isDraft: false
         }),
         req.query
       ).paginating();
+      
       const posts = await features.query
         .sort("-createdAt")
         .populate("user likes", "avatar username fullname followers")
@@ -74,12 +100,282 @@ const postCtrl = {
     }
   },
 
+  getDraftPosts: async (req, res) => {
+    try {
+      const features = new APIfeatures(
+        Posts.find({
+          user: req.user._id,
+          isDraft: true,
+          status: 'draft'
+        }),
+        req.query
+      ).paginating();
+
+      const drafts = await features.query
+        .sort("-updatedAt")
+        .populate("user", "avatar username fullname");
+
+      res.json({
+        msg: "Success",
+        result: drafts.length,
+        drafts,
+      });
+    } catch (err) {
+      return res.status(500).json({ msg: err.message });
+    }
+  },
+
+  getScheduledPosts: async (req, res) => {
+    try {
+      const features = new APIfeatures(
+        Posts.find({
+          user: req.user._id,
+          status: 'scheduled'
+        }),
+        req.query
+      ).paginating();
+
+      const scheduledPosts = await features.query
+        .sort("scheduledDate")
+        .populate("user", "avatar username fullname");
+
+      res.json({
+        msg: "Success",
+        result: scheduledPosts.length,
+        scheduledPosts,
+      });
+    } catch (err) {
+      return res.status(500).json({ msg: err.message });
+    }
+  },
+
+  saveDraft: async (req, res) => {
+    try {
+      const { content, images } = req.body;
+
+      const newDraft = new Posts({
+        content,
+        images: images || [],
+        user: req.user._id,
+        status: 'draft',
+        isDraft: true
+      });
+
+      await newDraft.save();
+
+      res.json({
+        msg: "Draft saved successfully.",
+        draft: {
+          ...newDraft._doc,
+          user: req.user,
+        },
+      });
+    } catch (err) {
+      return res.status(500).json({ msg: err.message });
+    }
+  },
+
+  publishDraft: async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const post = await Posts.findOne({
+        _id: id,
+        user: req.user._id,
+        isDraft: true
+      });
+
+      if (!post) {
+        return res.status(404).json({ msg: "Draft not found." });
+      }
+
+      if (post.images.length === 0) {
+        return res.status(400).json({ msg: "Please add at least one image before publishing." });
+      }
+
+      post.status = 'published';
+      post.isDraft = false;
+      post.publishedAt = new Date();
+      await post.save();
+
+      const populatedPost = await Posts.findById(id)
+        .populate("user likes", "avatar username fullname followers")
+        .populate({
+          path: "comments",
+          populate: {
+            path: "user likes",
+            select: "-password",
+          },
+        });
+
+      res.json({
+        msg: "Draft published successfully.",
+        post: populatedPost,
+      });
+    } catch (err) {
+      return res.status(500).json({ msg: err.message });
+    }
+  },
+
+  updateDraft: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { content, images } = req.body;
+
+      const draft = await Posts.findOne({
+        _id: id,
+        user: req.user._id,
+        isDraft: true
+      });
+
+      if (!draft) {
+        return res.status(404).json({ msg: "Draft not found." });
+      }
+
+      draft.content = content;
+      draft.images = images;
+      await draft.save();
+
+      res.json({
+        msg: "Draft updated successfully.",
+        draft,
+      });
+    } catch (err) {
+      return res.status(500).json({ msg: err.message });
+    }
+  },
+
+  deleteDraft: async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const draft = await Posts.findOneAndDelete({
+        _id: id,
+        user: req.user._id,
+        isDraft: true
+      });
+
+      if (!draft) {
+        return res.status(404).json({ msg: "Draft not found." });
+      }
+
+      res.json({ msg: "Draft deleted successfully." });
+    } catch (err) {
+      return res.status(500).json({ msg: err.message });
+    }
+  },
+
+  schedulePost: async (req, res) => {
+    try {
+      const { content, images, scheduledDate } = req.body;
+
+      if (images.length === 0) {
+        return res.status(400).json({ msg: "Please add photo(s)" });
+      }
+
+      if (!scheduledDate) {
+        return res.status(400).json({ msg: "Please provide scheduled date." });
+      }
+
+      const scheduleDate = new Date(scheduledDate);
+      if (scheduleDate <= new Date()) {
+        return res.status(400).json({ msg: "Scheduled date must be in the future." });
+      }
+
+      const newPost = new Posts({
+        content,
+        images,
+        user: req.user._id,
+        status: 'scheduled',
+        scheduledDate: scheduleDate,
+        isDraft: false
+      });
+
+      await newPost.save();
+
+      res.json({
+        msg: `Post scheduled for ${scheduleDate.toLocaleString()}.`,
+        post: {
+          ...newPost._doc,
+          user: req.user,
+        },
+      });
+    } catch (err) {
+      return res.status(500).json({ msg: err.message });
+    }
+  },
+
+  updateScheduledPost: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { content, images, scheduledDate } = req.body;
+
+      const post = await Posts.findOne({
+        _id: id,
+        user: req.user._id,
+        status: 'scheduled'
+      });
+
+      if (!post) {
+        return res.status(404).json({ msg: "Scheduled post not found." });
+      }
+
+      if (scheduledDate) {
+        const scheduleDate = new Date(scheduledDate);
+        if (scheduleDate <= new Date()) {
+          return res.status(400).json({ msg: "Scheduled date must be in the future." });
+        }
+        post.scheduledDate = scheduleDate;
+      }
+
+      if (content) post.content = content;
+      if (images) post.images = images;
+
+      await post.save();
+
+      res.json({
+        msg: "Scheduled post updated successfully.",
+        post,
+      });
+    } catch (err) {
+      return res.status(500).json({ msg: err.message });
+    }
+  },
+
+  cancelScheduledPost: async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const post = await Posts.findOne({
+        _id: id,
+        user: req.user._id,
+        status: 'scheduled'
+      });
+
+      if (!post) {
+        return res.status(404).json({ msg: "Scheduled post not found." });
+      }
+
+      post.status = 'draft';
+      post.isDraft = true;
+      post.scheduledDate = null;
+      await post.save();
+
+      res.json({
+        msg: "Scheduled post cancelled and saved as draft.",
+        post,
+      });
+    } catch (err) {
+      return res.status(500).json({ msg: err.message });
+    }
+  },
+
   updatePost: async (req, res) => {
     try {
       const { content, images } = req.body;
 
       const post = await Posts.findOneAndUpdate(
-        { _id: req.params.id },
+        { _id: req.params.id, user: req.user._id },
         {
           content,
           images,
@@ -93,6 +389,10 @@ const postCtrl = {
             select: "-password",
           },
         });
+
+      if (!post) {
+        return res.status(404).json({ msg: "Post not found." });
+      }
 
       res.json({
         msg: "Post updated successfully.",
@@ -164,7 +464,11 @@ const postCtrl = {
   getUserPosts: async (req, res) => {
     try {
       const features = new APIfeatures(
-        Posts.find({ user: req.params.id }),
+        Posts.find({
+          user: req.params.id,
+          status: 'published',
+          isDraft: false
+        }),
         req.query
       ).paginating();
       const posts = await features.query.sort("-createdAt");
@@ -207,7 +511,13 @@ const postCtrl = {
       const num = req.query.num || 8;
 
       const posts = await Posts.aggregate([
-        { $match: { user: { $nin: newArr } } },
+        {
+          $match: {
+            user: { $nin: newArr },
+            status: 'published',
+            isDraft: false
+          }
+        },
         { $sample: { size: Number(num) } },
       ]);
 
@@ -228,14 +538,18 @@ const postCtrl = {
         user: req.user._id,
       });
 
+      if (!post) {
+        return res.status(404).json({ msg: "Post not found." });
+      }
+
       await Comments.deleteMany({ _id: { $in: post.comments } });
 
-      res.json({ 
+      res.json({
         msg: "Post deleted successfully.",
         newPost: {
           ...post,
-          user: req.user
-        } 
+          user: req.user,
+        },
       });
     } catch (err) {
       return res.status(500).json({ msg: err.message });
@@ -330,15 +644,21 @@ const postCtrl = {
 
   getSavePost: async (req, res) => {
     try {
-      const features = new APIfeatures(Posts.find({_id: {$in: req.user.saved}}), req.query).paginating();
+      const features = new APIfeatures(
+        Posts.find({
+          _id: { $in: req.user.saved },
+          status: 'published',
+          isDraft: false
+        }),
+        req.query
+      ).paginating();
 
       const savePosts = await features.query.sort("-createdAt");
 
       res.json({
         savePosts,
-        result: savePosts.length
-      })
-
+        result: savePosts.length,
+      });
     } catch (err) {
       return res.status(500).json({ msg: err.message });
     }

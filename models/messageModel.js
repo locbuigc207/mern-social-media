@@ -8,6 +8,21 @@ const messageSchema = new Schema(
     recipient: { type: mongoose.Types.ObjectId, ref: "user" },
     text: String,
     media: Array,
+    isRead: {
+      type: Boolean,
+      default: false
+    },
+    readAt: {
+      type: Date
+    },
+    isDeleted: {
+      type: Boolean,
+      default: false
+    },
+    deletedBy: [{
+      type: mongoose.Types.ObjectId,
+      ref: "user"
+    }]
   },
   {
     timestamps: true,

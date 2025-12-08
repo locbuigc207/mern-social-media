@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const {Schema } = mongoose;
+const { Schema } = mongoose;
 
 const userSchema = new Schema(
   {
@@ -74,11 +74,68 @@ const userSchema = new Schema(
         ref: "user",
       },
     ],
+    isVerified: {
+      type: Boolean,
+      default: false,
+    },
+    verificationToken: {
+      type: String,
+    },
+    verificationTokenExpires: {
+      type: Date,
+    },
+    resetPasswordToken: {
+      type: String,
+    },
+    resetPasswordExpires: {
+      type: Date,
+    },
+    blockedUsers: [
+      {
+        type: mongoose.Types.ObjectId,
+        ref: "user",
+      },
+    ],
+    blockedBy: [
+      {
+        type: mongoose.Types.ObjectId,
+        ref: "user",
+      },
+    ],
+    privacySettings: {
+      profileVisibility: {
+        type: String,
+        enum: ['public', 'private', 'friends'],
+        default: 'public'
+      },
+      whoCanMessage: {
+        type: String,
+        enum: ['everyone', 'following', 'none'],
+        default: 'everyone'
+      },
+      whoCanComment: {
+        type: String,
+        enum: ['everyone', 'following', 'none'],
+        default: 'everyone'
+      },
+      whoCanTag: {
+        type: String,
+        enum: ['everyone', 'following', 'none'],
+        default: 'everyone'
+      },
+      showFollowers: {
+        type: Boolean,
+        default: true
+      },
+      showFollowing: {
+        type: Boolean,
+        default: true
+      }
+    }
   },
   {
     timestamps: true,
   }
 );
 
-
-module.exports = mongoose.model('user',userSchema);
+module.exports = mongoose.model('user', userSchema);

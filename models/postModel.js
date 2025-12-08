@@ -1,7 +1,6 @@
 const mongoose = require("mongoose");
 const { Schema } = mongoose;
 
-
 const postSchema = new Schema(
   {
     content: String,
@@ -31,11 +30,27 @@ const postSchema = new Schema(
         ref: "user",
       },
     ],
+    status: {
+      type: String,
+      enum: ['published', 'draft', 'scheduled'],
+      default: 'published'
+    },
+    scheduledDate: {
+      type: Date
+    },
+    publishedAt: {
+      type: Date
+    },
+    isDraft: {
+      type: Boolean,
+      default: false
+    }
   },
   {
     timestamps: true,
   }
 );
 
+postSchema.index({ scheduledDate: 1, status: 1 });
 
-module.exports = mongoose.model('post', postSchema);
+module.exports = mongoose.model("post", postSchema);

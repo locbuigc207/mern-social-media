@@ -22,10 +22,44 @@ const userCtrl = {
         .populate("followers following", "-password");
 
       if (!user) {
-        return res.status(400).json({ msg: "requested user does not exist." });
+        return res.status(400).json({ msg: "Requested user does not exist." });
       }
 
-      res.json({ user });
+      if (user.blockedUsers.includes(req.user._id)) {
+        return res.status(403).json({ msg: "You are blocked by this user." });
+      }
+
+      if (user.privacySettings.profileVisibility === 'private') {
+        const isFollowing = user.followers.some(
+          (follower) => follower._id.toString() === req.user._id.toString()
+        );
+        const isFollower = user.following.some(
+          (following) => following._id.toString() === req.user._id.toString()
+        );
+
+        if (!isFollowing && !isFollower && user._id.toString() !== req.user._id.toString()) {
+          return res.json({
+            user: {
+              _id: user._id,
+              username: user.username,
+              fullname: user.fullname,
+              avatar: user.avatar,
+              privacySettings: { profileVisibility: 'private' }
+            },
+            message: "This account is private"
+          });
+        }
+      }
+
+      const userData = user.toObject();
+      if (!user.privacySettings.showFollowers) {
+        userData.followers = [];
+      }
+      if (!user.privacySettings.showFollowing) {
+        userData.following = [];
+      }
+
+      res.json({ user: userData });
     } catch (err) {
       return res.status(500).json({ msg: err.message });
     }
@@ -57,8 +91,135 @@ const userCtrl = {
     }
   },
 
+  updatePrivacySettings: async (req, res) => {
+    try {
+      const {
+        profileVisibility,
+        whoCanMessage,
+        whoCanComment,
+        whoCanTag,
+        showFollowers,
+        showFollowing
+      } = req.body;
+
+      const privacySettings = {};
+
+      if (profileVisibility) privacySettings.profileVisibility = profileVisibility;
+      if (whoCanMessage) privacySettings.whoCanMessage = whoCanMessage;
+      if (whoCanComment) privacySettings.whoCanComment = whoCanComment;
+      if (whoCanTag) privacySettings.whoCanTag = whoCanTag;
+      if (typeof showFollowers !== 'undefined') privacySettings.showFollowers = showFollowers;
+      if (typeof showFollowing !== 'undefined') privacySettings.showFollowing = showFollowing;
+
+      const user = await Users.findByIdAndUpdate(
+        req.user._id,
+        { $set: { privacySettings } },
+        { new: true }
+      ).select('-password');
+
+      res.json({
+        msg: "Privacy settings updated successfully.",
+        privacySettings: user.privacySettings
+      });
+    } catch (err) {
+      return res.status(500).json({ msg: err.message });
+    }
+  },
+
+  getPrivacySettings: async (req, res) => {
+    try {
+      const user = await Users.findById(req.user._id).select('privacySettings');
+
+      res.json({ privacySettings: user.privacySettings });
+    } catch (err) {
+      return res.status(500).json({ msg: err.message });
+    }
+  },
+
+  blockUser: async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      if (id === req.user._id.toString()) {
+        return res.status(400).json({ msg: "You cannot block yourself." });
+      }
+
+      const user = await Users.findById(id);
+      if (!user) {
+        return res.status(400).json({ msg: "User not found." });
+      }
+
+      const currentUser = await Users.findById(req.user._id);
+      if (currentUser.blockedUsers.includes(id)) {
+        return res.status(400).json({ msg: "User is already blocked." });
+      }
+
+      await Users.findByIdAndUpdate(req.user._id, {
+        $push: { blockedUsers: id },
+        $pull: { following: id, followers: id }
+      });
+
+      await Users.findByIdAndUpdate(id, {
+        $push: { blockedBy: req.user._id },
+        $pull: { following: req.user._id, followers: req.user._id }
+      });
+
+      res.json({ msg: "User blocked successfully." });
+    } catch (err) {
+      return res.status(500).json({ msg: err.message });
+    }
+  },
+
+  unblockUser: async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      await Users.findByIdAndUpdate(req.user._id, {
+        $pull: { blockedUsers: id }
+      });
+
+      await Users.findByIdAndUpdate(id, {
+        $pull: { blockedBy: req.user._id }
+      });
+
+      res.json({ msg: "User unblocked successfully." });
+    } catch (err) {
+      return res.status(500).json({ msg: err.message });
+    }
+  },
+
+  getBlockedUsers: async (req, res) => {
+    try {
+      const user = await Users.findById(req.user._id)
+        .populate('blockedUsers', 'username fullname avatar')
+        .select('blockedUsers');
+
+      res.json({ blockedUsers: user.blockedUsers });
+    } catch (err) {
+      return res.status(500).json({ msg: err.message });
+    }
+  },
+
+  checkBlocked: async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const currentUser = await Users.findById(req.user._id).select('blockedUsers');
+      const isBlocked = currentUser.blockedUsers.includes(id);
+
+      res.json({ isBlocked });
+    } catch (err) {
+      return res.status(500).json({ msg: err.message });
+    }
+  },
+
   follow: async (req, res) => {
     try {
+      const targetUser = await Users.findById(req.params.id);
+      if (targetUser.blockedUsers.includes(req.user._id)) {
+        return res.status(403).json({ msg: "You cannot follow this user." });
+      }
+
       const user = await Users.find({
         _id: req.params.id,
         followers: req.user._id,
@@ -68,13 +229,11 @@ const userCtrl = {
           .status(500)
           .json({ msg: "You are already following this user." });
 
-
-
       const newUser = await Users.findOneAndUpdate(
         { _id: req.params.id },
         {
           $push: {
-            followers: req.user._id
+            followers: req.user._id,
           },
         },
         { new: true }
@@ -94,15 +253,13 @@ const userCtrl = {
 
   unfollow: async (req, res) => {
     try {
-      
-
       const newUser = await Users.findOneAndUpdate(
         { _id: req.params.id },
         {
-          $pull: { followers: req.user._id }
+          $pull: { followers: req.user._id },
         },
         { new: true }
-      ).populate('followers following', '-password');
+      ).populate("followers following", "-password");
 
       await Users.findOneAndUpdate(
         { _id: req.user._id },
@@ -118,7 +275,13 @@ const userCtrl = {
 
   suggestionsUser: async (req, res) => {
     try {
-      const newArr = [...req.user.following, req.user._id];
+      const currentUser = await Users.findById(req.user._id);
+      const newArr = [
+        ...req.user.following,
+        req.user._id,
+        ...currentUser.blockedUsers, 
+        ...currentUser.blockedBy 
+      ];
 
       const num = req.query.num || 10;
       const users = await Users.aggregate([
@@ -150,9 +313,6 @@ const userCtrl = {
       return res.status(500).json({ msg: err.message });
     }
   },
-
-
-
 };
 
 module.exports = userCtrl;

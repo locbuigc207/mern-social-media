@@ -1,6 +1,13 @@
 const Users = require("../models/userModel");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
+const {
+  sendEmail,
+  getVerificationEmailTemplate,
+  getPasswordResetTemplate,
+  getWelcomeEmailTemplate,
+} = require("../utils/sendMail");
 
 const authCtrl = {
   register: async (req, res) => {
@@ -29,35 +36,197 @@ const authCtrl = {
 
       const passwordHash = await bcrypt.hash(password, 12);
 
+      const verificationToken = crypto.randomBytes(32).toString("hex");
+      const verificationTokenExpires = Date.now() + 24 * 60 * 60 * 1000; 
+
       const newUser = new Users({
         fullname,
         username: newUserName,
         email,
         password: passwordHash,
         gender,
+        verificationToken,
+        verificationTokenExpires,
+        isVerified: false,
       });
 
-      const access_token = createAccessToken({ id: newUser._id });
-      const refresh_token = createRefreshToken({ id: newUser._id });
+      await newUser.save();
 
-      res.cookie("refreshtoken", refresh_token, {
-        httpOnly: true,
-        path: "/api/refresh_token",
-        maxAge: 30 * 24 * 60 * 60 * 1000, //validity of 30 days
-      });
+      const verificationLink = `${process.env.CLIENT_URL}/verify-email/${verificationToken}`;
+      const emailHtml = getVerificationEmailTemplate(fullname, verificationLink);
+
+      try {
+        await sendEmail(email, "Verify Your Email - Campus Connect", emailHtml);
+      } catch (emailError) {
+        console.error("Error sending verification email:", emailError);
+      }
 
       res.json({
-        msg: "Registered Successfully!",
-        access_token,
+        msg: "Registration successful! Please check your email to verify your account.",
         user: {
           ...newUser._doc,
           password: "",
         },
       });
+    } catch (err) {
+      return res.status(500).json({ msg: err.message });
+    }
+  },
 
-      await newUser.save();
+  verifyEmail: async (req, res) => {
+    try {
+      const { token } = req.params;
 
-      res.json({ msg: "registered" });
+      const user = await Users.findOne({
+        verificationToken: token,
+        verificationTokenExpires: { $gt: Date.now() },
+      });
+
+      if (!user) {
+        return res
+          .status(400)
+          .json({ msg: "Verification token is invalid or has expired." });
+      }
+
+      user.isVerified = true;
+      user.verificationToken = undefined;
+      user.verificationTokenExpires = undefined;
+      await user.save();
+
+      const welcomeHtml = getWelcomeEmailTemplate(user.username);
+      try {
+        await sendEmail(user.email, "Welcome to Campus Connect! 🎉", welcomeHtml);
+      } catch (emailError) {
+        console.error("Error sending welcome email:", emailError);
+      }
+
+      const access_token = createAccessToken({ id: user._id });
+      const refresh_token = createRefreshToken({ id: user._id });
+
+      res.cookie("refreshtoken", refresh_token, {
+        httpOnly: true,
+        path: "/api/refresh_token",
+        maxAge: 30 * 24 * 60 * 60 * 1000,
+      });
+
+      res.json({
+        msg: "Email verified successfully!",
+        access_token,
+        user: {
+          ...user._doc,
+          password: "",
+        },
+      });
+    } catch (err) {
+      return res.status(500).json({ msg: err.message });
+    }
+  },
+
+  resendVerificationEmail: async (req, res) => {
+    try {
+      const { email } = req.body;
+
+      const user = await Users.findOne({ email });
+
+      if (!user) {
+        return res.status(400).json({ msg: "User not found." });
+      }
+
+      if (user.isVerified) {
+        return res.status(400).json({ msg: "Email is already verified." });
+      }
+
+      const verificationToken = crypto.randomBytes(32).toString("hex");
+      const verificationTokenExpires = Date.now() + 24 * 60 * 60 * 1000;
+
+      user.verificationToken = verificationToken;
+      user.verificationTokenExpires = verificationTokenExpires;
+      await user.save();
+
+      const verificationLink = `${process.env.CLIENT_URL}/verify-email/${verificationToken}`;
+      const emailHtml = getVerificationEmailTemplate(user.username, verificationLink);
+
+      await sendEmail(email, "Verify Your Email - Campus Connect", emailHtml);
+
+      res.json({ msg: "Verification email sent successfully!" });
+    } catch (err) {
+      return res.status(500).json({ msg: err.message });
+    }
+  },
+
+  forgotPassword: async (req, res) => {
+    try {
+      const { email } = req.body;
+
+      const user = await Users.findOne({ email });
+
+      if (!user) {
+        return res.status(400).json({ msg: "User with this email does not exist." });
+      }
+
+      const resetToken = crypto.randomBytes(32).toString("hex");
+      const resetPasswordToken = crypto
+        .createHash("sha256")
+        .update(resetToken)
+        .digest("hex");
+      const resetPasswordExpires = Date.now() + 60 * 60 * 1000; // 1 hour
+
+      user.resetPasswordToken = resetPasswordToken;
+      user.resetPasswordExpires = resetPasswordExpires;
+      await user.save();
+
+      const resetLink = `${process.env.CLIENT_URL}/reset-password/${resetToken}`;
+      const emailHtml = getPasswordResetTemplate(user.username, resetLink);
+
+      await sendEmail(email, "Password Reset Request - Campus Connect", emailHtml);
+
+      res.json({
+        msg: "Password reset email sent successfully! Please check your email.",
+      });
+    } catch (err) {
+      return res.status(500).json({ msg: err.message });
+    }
+  },
+
+  resetPassword: async (req, res) => {
+    try {
+      const { token } = req.params;
+      const { password, confirmPassword } = req.body;
+
+      if (password !== confirmPassword) {
+        return res.status(400).json({ msg: "Passwords do not match." });
+      }
+
+      if (password.length < 6) {
+        return res
+          .status(400)
+          .json({ msg: "Password must be at least 6 characters long." });
+      }
+
+      const resetPasswordToken = crypto
+        .createHash("sha256")
+        .update(token)
+        .digest("hex");
+
+      const user = await Users.findOne({
+        resetPasswordToken,
+        resetPasswordExpires: { $gt: Date.now() },
+      });
+
+      if (!user) {
+        return res
+          .status(400)
+          .json({ msg: "Password reset token is invalid or has expired." });
+      }
+
+      const passwordHash = await bcrypt.hash(password, 12);
+
+      user.password = passwordHash;
+      user.resetPasswordToken = undefined;
+      user.resetPasswordExpires = undefined;
+      await user.save();
+
+      res.json({ msg: "Password reset successful! You can now login." });
     } catch (err) {
       return res.status(500).json({ msg: err.message });
     }
@@ -65,13 +234,32 @@ const authCtrl = {
 
   changePassword: async (req, res) => {
     try {
-      const {oldPassword, newPassword} = req.body;
+      const { oldPassword, newPassword, cnfNewPassword } = req.body;
+
+      if (!oldPassword || oldPassword.length === 0) {
+        return res
+          .status(400)
+          .json({ msg: "Please enter your old password." });
+      }
+      if (!newPassword || newPassword.length === 0) {
+        return res
+          .status(400)
+          .json({ msg: "Please enter your new password." });
+      }
+      if (!cnfNewPassword || cnfNewPassword.length === 0) {
+        return res
+          .status(400)
+          .json({ msg: "Please confirm your new password." });
+      }
+      if (newPassword !== cnfNewPassword) {
+        return res.status(400).json({ msg: "Your password does not match" });
+      }
 
       const user = await Users.findOne({ _id: req.user._id });
 
       const isMatch = await bcrypt.compare(oldPassword, user.password);
       if (!isMatch) {
-        return res.status(400).json({ msg: "Your password is wrong." });
+        return res.status(400).json({ msg: "Your old password is wrong." });
       }
 
       if (newPassword.length < 6) {
@@ -81,11 +269,13 @@ const authCtrl = {
       }
 
       const newPasswordHash = await bcrypt.hash(newPassword, 12);
-      
-      await Users.findOneAndUpdate({_id: req.user._id}, {password: newPasswordHash });
 
-      res.json({msg: "Password updated successfully."})
+      await Users.findOneAndUpdate(
+        { _id: req.user._id },
+        { password: newPasswordHash }
+      );
 
+      res.json({ msg: "Password updated successfully." });
     } catch (err) {
       return res.status(500).json({ msg: err.message });
     }
@@ -123,11 +313,9 @@ const authCtrl = {
         email,
         password: passwordHash,
         gender,
-        role
+        role,
+        isVerified: true, 
       });
-
-
-
 
       await newUser.save();
 
@@ -155,18 +343,25 @@ const authCtrl = {
         return res.status(400).json({ msg: "Email or Password is incorrect." });
       }
 
+      if (!user.isVerified) {
+        return res.status(400).json({
+          msg: "Please verify your email before logging in.",
+          requireVerification: true,
+        });
+      }
+
       const access_token = createAccessToken({ id: user._id });
       const refresh_token = createRefreshToken({ id: user._id });
 
       res.cookie("refreshtoken", refresh_token, {
         httpOnly: true,
         path: "/api/refresh_token",
-        sameSite: 'lax',
-        maxAge: 30 * 24 * 60 * 60 * 1000, //validity of 30 days
+        sameSite: "lax",
+        maxAge: 30 * 24 * 60 * 60 * 1000,
       });
 
       res.json({
-        msg: "Logged in  Successfully!",
+        msg: "Logged in Successfully!",
         access_token,
         user: {
           ...user._doc,
@@ -199,11 +394,11 @@ const authCtrl = {
       res.cookie("refreshtoken", refresh_token, {
         httpOnly: true,
         path: "/api/refresh_token",
-        maxAge: 30 * 24 * 60 * 60 * 1000, //validity of 30 days
+        maxAge: 30 * 24 * 60 * 60 * 1000,
       });
 
       res.json({
-        msg: "Logged in  Successfully!",
+        msg: "Logged in Successfully!",
         access_token,
         user: {
           ...user._doc,
