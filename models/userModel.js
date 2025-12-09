@@ -74,6 +74,12 @@ const userSchema = new Schema(
         ref: "user",
       },
     ],
+    closeFriends: [
+      {
+        type: mongoose.Types.ObjectId,
+        ref: "user",
+      },
+    ],
     isVerified: {
       type: Boolean,
       default: false,
