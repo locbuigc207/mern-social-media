@@ -1,6 +1,8 @@
 const Posts = require("../models/postModel");
 const Comments = require("../models/commentModel");
 const Users = require("../models/userModel");
+const { uploadMultipleToCloudinary } = require("../services/cloudinaryService");
+const logger = require("../utils/logger");
 
 class APIfeatures {
   constructor(query, queryString) {
@@ -20,25 +22,69 @@ class APIfeatures {
 const postCtrl = {
   createPost: async (req, res) => {
     try {
-      const { content, images, status, scheduledDate, isDraft } = req.body;
+      const { content, status, scheduledDate, isDraft } = req.body;
 
-      if (images.length === 0 && !isDraft) {
-        return res.status(400).json({ msg: "Please add photo(s)" });
+      let images = [];
+      if (req.files && req.files.length > 0) {
+        logger.info('Uploading files to Cloudinary', {
+          userId: req.user._id,
+          fileCount: req.files.length
+        });
+
+        const filePaths = req.files.map(file => file.path);
+        const uploadResult = await uploadMultipleToCloudinary(filePaths, {
+          folder: 'campus-connect/posts',
+          resourceType: 'auto'
+        });
+
+        if (!uploadResult.success) {
+          logger.error('Cloudinary upload failed', null, {
+            userId: req.user._id,
+            errors: uploadResult.errors
+          });
+          return res.status(500).json({
+            msg: 'Failed to upload some images.',
+            errors: uploadResult.errors
+          });
+        }
+
+        images = uploadResult.results.map(result => ({
+          url: result.url,
+          publicId: result.publicId,
+          type: result.type,
+          width: result.width,
+          height: result.height
+        }));
+
+        logger.info('Files uploaded successfully', {
+          userId: req.user._id,
+          uploadedCount: images.length
+        });
+      }
+
+      if (!isDraft && images.length === 0) {
+        return res.status(400).json({
+          msg: "Please add at least one photo or video."
+        });
       }
 
       if (status === 'scheduled') {
         if (!scheduledDate) {
-          return res.status(400).json({ msg: "Please provide scheduled date." });
+          return res.status(400).json({
+            msg: "Please provide scheduled date."
+          });
         }
 
         const scheduleDate = new Date(scheduledDate);
         if (scheduleDate <= new Date()) {
-          return res.status(400).json({ msg: "Scheduled date must be in the future." });
+          return res.status(400).json({
+            msg: "Scheduled date must be in the future."
+          });
         }
       }
 
       const newPost = new Posts({
-        content,
+        content: content || '',
         images,
         user: req.user._id,
         status: status || 'published',
@@ -46,8 +92,14 @@ const postCtrl = {
         scheduledDate: scheduledDate ? new Date(scheduledDate) : null,
         publishedAt: status === 'published' ? new Date() : null
       });
-      
+
       await newPost.save();
+
+      logger.audit('Post created', req.user._id, {
+        postId: newPost._id,
+        status: newPost.status,
+        imagesCount: images.length
+      });
 
       let message = "Post created successfully.";
       if (status === 'scheduled') {
@@ -64,6 +116,9 @@ const postCtrl = {
         },
       });
     } catch (err) {
+      logger.error('Create post failed', err, {
+        userId: req.user._id
+      });
       return res.status(500).json({ msg: err.message });
     }
   },
@@ -73,19 +128,19 @@ const postCtrl = {
       const features = new APIfeatures(
         Posts.find({
           user: [...req.user.following, req.user._id],
-          status: 'published', 
+          status: 'published',
           isDraft: false
         }),
         req.query
       ).paginating();
-      
+
       const posts = await features.query
         .sort("-createdAt")
         .populate("user likes", "avatar username fullname followers")
         .populate({
           path: "comments",
           populate: {
-            path: "user likes ",
+            path: "user likes",
             select: "-password",
           },
         });
@@ -96,6 +151,9 @@ const postCtrl = {
         posts,
       });
     } catch (err) {
+      if (logger) {
+        logger.error('Get posts failed', err, { userId: req.user._id });
+      }
       return res.status(500).json({ msg: err.message });
     }
   },
@@ -372,37 +430,70 @@ const postCtrl = {
 
   updatePost: async (req, res) => {
     try {
-      const { content, images } = req.body;
+      const { content } = req.body;
+      let images = [];
 
-      const post = await Posts.findOneAndUpdate(
-        { _id: req.params.id, user: req.user._id },
-        {
-          content,
-          images,
+      if (req.files && req.files.length > 0) {
+        const filePaths = req.files.map(file => file.path);
+        const uploadResult = await uploadMultipleToCloudinary(filePaths, {
+          folder: 'campus-connect/posts',
+          resourceType: 'auto'
+        });
+
+        if (uploadResult.success) {
+          images = uploadResult.results.map(result => ({
+            url: result.url,
+            publicId: result.publicId,
+            type: result.type,
+            width: result.width,
+            height: result.height
+          }));
         }
+      }
+
+      const existingPost = await Posts.findById(req.params.id);
+      if (!existingPost) {
+        return res.status(404).json({ msg: "Post not found." });
+      }
+
+      if (existingPost.user.toString() !== req.user._id.toString()) {
+        return res.status(403).json({ msg: "Unauthorized." });
+      }
+
+      const existingImages = JSON.parse(req.body.existingImages || '[]');
+      const finalImages = [...existingImages, ...images];
+
+      const post = await Posts.findByIdAndUpdate(
+        req.params.id,
+        {
+          content: content || existingPost.content,
+          images: finalImages
+        },
+        { new: true }
       )
         .populate("user likes", "avatar username fullname")
         .populate({
           path: "comments",
           populate: {
-            path: "user likes ",
+            path: "user likes",
             select: "-password",
           },
         });
 
-      if (!post) {
-        return res.status(404).json({ msg: "Post not found." });
-      }
+      logger.audit('Post updated', req.user._id, {
+        postId: req.params.id,
+        newImagesCount: images.length
+      });
 
       res.json({
         msg: "Post updated successfully.",
-        newPost: {
-          ...post._doc,
-          content,
-          images,
-        },
+        newPost: post,
       });
     } catch (err) {
+      logger.error('Update post failed', err, {
+        userId: req.user._id,
+        postId: req.params.id
+      });
       return res.status(500).json({ msg: err.message });
     }
   },
