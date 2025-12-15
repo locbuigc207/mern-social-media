@@ -1,5 +1,5 @@
 const Posts = require("../models/postModel");
-const Users = require("../models/userModel");
+const logger = require("./logger");
 
 const checkScheduledPosts = async () => {
   try {
@@ -10,31 +10,62 @@ const checkScheduledPosts = async () => {
       scheduledDate: { $lte: now }
     }).populate('user', 'followers');
 
-    for (const post of scheduledPosts) {
-      post.status = 'published';
-      post.isDraft = false;
-      post.publishedAt = now;
-      await post.save();
-
-      console.log(`Published scheduled post: ${post._id}`);
-
-
+    if (scheduledPosts.length === 0) {
+      return;
     }
 
-    if (scheduledPosts.length > 0) {
-      console.log(`✅ Published ${scheduledPosts.length} scheduled post(s)`);
+    let successCount = 0;
+    let errorCount = 0;
+
+    for (const post of scheduledPosts) {
+      try {
+        post.status = 'published';
+        post.isDraft = false;
+        post.publishedAt = now;
+        await post.save();
+        
+        successCount++;
+        logger.info('Published scheduled post', { 
+          postId: post._id,
+          userId: post.user._id,
+          scheduledDate: post.scheduledDate
+        });
+      } catch (postError) {
+        errorCount++;
+        logger.error('Failed to publish scheduled post', postError, {
+          postId: post._id,
+          userId: post.user._id
+        });
+      }
+    }
+
+    if (successCount > 0) {
+      logger.info(` Published ${successCount} scheduled post(s)`);
+    }
+    if (errorCount > 0) {
+      logger.warn(`  Failed to publish ${errorCount} scheduled post(s)`);
     }
   } catch (error) {
-    console.error('Error checking scheduled posts:', error);
+    logger.error('Error in checkScheduledPosts', error);
   }
 };
 
 const startScheduler = () => {
-  console.log('📅 Post scheduler started');
+  logger.info(' Post scheduler started');
   
   checkScheduledPosts();
   
-  setInterval(checkScheduledPosts, 60 * 1000);
+  const schedulerInterval = setInterval(checkScheduledPosts, 60 * 1000);
+
+  process.on('SIGTERM', () => {
+    clearInterval(schedulerInterval);
+    logger.info('Post scheduler stopped');
+  });
+
+  process.on('SIGINT', () => {
+    clearInterval(schedulerInterval);
+    logger.info('Post scheduler stopped');
+  });
 };
 
 module.exports = { startScheduler, checkScheduledPosts };

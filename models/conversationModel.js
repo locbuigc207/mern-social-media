@@ -12,4 +12,7 @@ const conversationSchema = new Schema(
   }
 );
 
+conversationSchema.index({ recipients: 1 });
+conversationSchema.index({ updatedAt: -1 });
+
 module.exports = mongoose.model("conversation", conversationSchema);

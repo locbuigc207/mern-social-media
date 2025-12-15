@@ -179,6 +179,8 @@ const postCtrl = {
         drafts,
       });
     } catch (err) {
+      const logger = require('../utils/logger');
+      logger.error('Get draft posts failed', err, { userId: req.user._id });
       return res.status(500).json({ msg: err.message });
     }
   },

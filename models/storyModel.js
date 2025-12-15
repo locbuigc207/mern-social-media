@@ -19,8 +19,8 @@ const storySchema = new Schema(
         enum: ["image", "video"],
         required: true,
       },
-      duration: Number, // For videos
-      thumbnail: String, // For videos
+      duration: Number, 
+      thumbnail: String, 
     },
     caption: {
       type: String,
@@ -91,7 +91,6 @@ const storySchema = new Schema(
   }
 );
 
-// Index for automatic deletion - Only for non-highlights
 storySchema.index(
   { expiresAt: 1 },
   { 
@@ -100,17 +99,13 @@ storySchema.index(
   }
 );
 
-// Index for efficient queries
 storySchema.index({ user: 1, isActive: 1, expiresAt: 1 });
 storySchema.index({ user: 1, isHighlight: 1 });
 
-// Middleware to set expiration time
 storySchema.pre("save", function (next) {
   if (this.isNew && !this.isHighlight) {
-    // Set expiration to 24 hours from now
     this.expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
   } else if (this.isHighlight && !this.expiresAt) {
-    // Highlights don't expire
     this.expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
   }
   next();

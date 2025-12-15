@@ -17,4 +17,8 @@ const notifySchema = new Schema(
   }
 );
 
+notifySchema.index({ recipients: 1, createdAt: -1 });
+notifySchema.index({ user: 1 });
+notifySchema.index({ isRead: 1 });
+
 module.exports = mongoose.model("notify", notifySchema);

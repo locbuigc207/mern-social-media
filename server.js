@@ -35,6 +35,7 @@ const SocketServer = require('./socketServer');
 const { startScheduler } = require('./utils/postScheduler');
 const { startCleanupSchedulers } = require('./utils/cleanupScheduler');
 const logger = require('./utils/logger');
+const { errorHandler, notFound } = require('./middleware/errorHandler');
 
 const app = express();
 
@@ -62,7 +63,7 @@ app.use((req, res, next) => {
   
   res.on('finish', () => {
     const duration = Date.now() - start;
-    const userId = req.user?._id || 'anonymous';
+    const userId = req.user?._id || 'anonymous'; 
     logger.request(req.method, req.originalUrl, userId, res.statusCode, duration);
   });
   
@@ -100,26 +101,39 @@ app.use('/api', require('./routes/storyRouter'));
 app.use('/api', require('./routes/groupRouter'));
 app.use('/api', require('./routes/hashtagRouter'));
 
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
+app.get('/api/health', async (req, res) => {
+  const health = {
+    status: 'ok',
     timestamp: new Date().toISOString(),
-    uptime: process.uptime()
-  });
+    uptime: process.uptime(),
+    services: {
+      database: 'unknown',
+      redis: 'unknown'
+    }
+  };
+
+  try {
+    if (mongoose.connection.readyState === 1) {
+      health.services.database = 'connected';
+    } else {
+      health.services.database = 'disconnected';
+      health.status = 'degraded';
+    }
+  } catch (error) {
+    health.services.database = 'error';
+    health.status = 'unhealthy';
+  }
+
+
+  const statusCode = health.status === 'ok' ? 200 : 503;
+  res.status(statusCode).json(health);
 });
 
-app.use((err, req, res, next) => {
-  logger.error('Unhandled error', err, {
-    url: req.originalUrl,
-    method: req.method,
-    userId: req.user?._id
-  });
-  
-  res.status(500).json({ 
-    msg: 'Internal server error',
-    error: process.env.NODE_ENV === 'development' ? err.message : undefined
-  });
-});
+app.use(notFound);
+
+app.use(errorHandler);
+
+
 
 const URI = process.env.MONGODB_URL;
 mongoose.connect(URI, {
@@ -130,7 +144,7 @@ mongoose.connect(URI, {
     logger.error('Database connection failed', err);
     throw err;
   }
-  logger.info('✅ Database Connected!');
+  logger.info(' Database Connected!');
   
   startScheduler();
   startCleanupSchedulers();
@@ -138,7 +152,7 @@ mongoose.connect(URI, {
 
 const port = process.env.PORT || 8080;
 http.listen(port, () => {
-  logger.info(`✅ Server listening on port ${port}`);
+  logger.info(` Server listening on port ${port}`);
 });
 
 const gracefulShutdown = (signal) => {
@@ -171,6 +185,6 @@ process.on('uncaughtException', (error) => {
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  logger.error('Unhandled Rejection', reason instanceof Error ? reason : new Error(String(reason)));
+  logger.error('Unhandled Rejection', reason instanceof Error ? reason : new Error(String(reason))); 
   process.exit(1);
 });
