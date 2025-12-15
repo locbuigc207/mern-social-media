@@ -137,11 +137,30 @@ const userSchema = new Schema(
         type: Boolean,
         default: true
       }
+    },
+    isBlocked: {
+      type: Boolean,
+      default: false
+    },
+    blockedReason: {
+      type: String
+    },
+    blockedBy: {
+      type: mongoose.Types.ObjectId,
+      ref: "user"
+    },
+    blockedAt: {
+      type: Date
     }
   },
   {
     timestamps: true,
   }
 );
+
+userSchema.index({ username: 1 });
+userSchema.index({ email: 1 });
+userSchema.index({ isBlocked: 1 });
+userSchema.index({ role: 1 });
 
 module.exports = mongoose.model('user', userSchema);
