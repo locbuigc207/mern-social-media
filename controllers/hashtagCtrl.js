@@ -122,3 +122,5 @@ const hashtagCtrl = {
     }
   }
 };
+
+module.exports = hashtagCtrl;

@@ -102,7 +102,7 @@ const userSchema = new Schema(
         ref: "user",
       },
     ],
-    blockedBy: [
+    blockedByUsers: [
       {
         type: mongoose.Types.ObjectId,
         ref: "user",
@@ -145,7 +145,7 @@ const userSchema = new Schema(
     blockedReason: {
       type: String
     },
-    blockedBy: {
+    blockedByAdmin: {
       type: mongoose.Types.ObjectId,
       ref: "user"
     },

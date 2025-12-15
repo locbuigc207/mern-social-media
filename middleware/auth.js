@@ -23,7 +23,7 @@ const auth = async (req, res, next) => {
 
     if (user.isBlocked && user.role !== 'admin') {
       return res.status(403).json({ 
-        msg: "Your account has been blocked",
+        msg: "Your account has been blocked by admin",
         reason: user.blockedReason,
         blockedAt: user.blockedAt,
         isBlocked: true

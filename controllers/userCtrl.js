@@ -160,7 +160,7 @@ const userCtrl = {
       });
 
       await Users.findByIdAndUpdate(id, {
-        $push: { blockedBy: req.user._id },
+        $push: { blockedByUsers: req.user._id }, 
         $pull: { following: req.user._id, followers: req.user._id }
       });
 
@@ -179,7 +179,7 @@ const userCtrl = {
       });
 
       await Users.findByIdAndUpdate(id, {
-        $pull: { blockedBy: req.user._id }
+        $pull: { blockedByUsers: req.user._id } 
       });
 
       res.json({ msg: "User unblocked successfully." });
@@ -276,11 +276,12 @@ const userCtrl = {
   suggestionsUser: async (req, res) => {
     try {
       const currentUser = await Users.findById(req.user._id);
+      
       const newArr = [
         ...req.user.following,
         req.user._id,
         ...currentUser.blockedUsers, 
-        ...currentUser.blockedBy 
+        ...currentUser.blockedByUsers 
       ];
 
       const num = req.query.num || 10;
