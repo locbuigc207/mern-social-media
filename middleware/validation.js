@@ -1,14 +1,22 @@
 const validator = require('validator');
 
-// Sanitize input to prevent XSS
 const sanitizeInput = (input) => {
   if (typeof input === 'string') {
     return validator.escape(input.trim());
   }
+  if (Array.isArray(input)) {
+    return input.map(sanitizeInput);
+  }
+  if (typeof input === 'object' && input !== null) {
+    const sanitized = {};
+    for (const key in input) {
+      sanitized[key] = sanitizeInput(input[key]);
+    }
+    return sanitized;
+  }
   return input;
 };
 
-// Validate and sanitize request body
 const validateBody = (schema) => {
   return (req, res, next) => {
     const errors = [];
@@ -16,56 +24,73 @@ const validateBody = (schema) => {
     for (const [field, rules] of Object.entries(schema)) {
       const value = req.body[field];
 
-      // Required check
-      if (rules.required && !value) {
+      if (rules.required && (value === undefined || value === null || value === '')) {
         errors.push(`${field} is required`);
         continue;
       }
 
-      // Skip if not required and no value
-      if (!rules.required && !value) continue;
+      if (!rules.required && (value === undefined || value === null)) continue;
 
-      // Type check
-      if (rules.type && typeof value !== rules.type) {
-        errors.push(`${field} must be ${rules.type}`);
-        continue;
+      if (rules.type) {
+        const actualType = Array.isArray(value) ? 'array' : typeof value;
+        if (actualType !== rules.type) {
+          errors.push(`${field} must be ${rules.type}`);
+          continue;
+        }
       }
 
-      // String validations
       if (typeof value === 'string') {
-        // Min length
         if (rules.minLength && value.length < rules.minLength) {
           errors.push(`${field} must be at least ${rules.minLength} characters`);
         }
 
-        // Max length
         if (rules.maxLength && value.length > rules.maxLength) {
           errors.push(`${field} must be less than ${rules.maxLength} characters`);
         }
 
-        // Pattern
         if (rules.pattern && !rules.pattern.test(value)) {
           errors.push(`${field} format is invalid`);
         }
 
-        // Sanitize
+        if (rules.isEmail && !validator.isEmail(value)) {
+          errors.push(`${field} must be a valid email`);
+        }
+
+        if (rules.isURL && !validator.isURL(value)) {
+          errors.push(`${field} must be a valid URL`);
+        }
+
         if (rules.sanitize !== false) {
           req.body[field] = sanitizeInput(value);
         }
       }
 
-      // Array validations
+      if (typeof value === 'number') {
+        if (rules.min !== undefined && value < rules.min) {
+          errors.push(`${field} must be at least ${rules.min}`);
+        }
+        if (rules.max !== undefined && value > rules.max) {
+          errors.push(`${field} must be at most ${rules.max}`);
+        }
+      }
+
       if (Array.isArray(value)) {
         if (rules.minItems && value.length < rules.minItems) {
           errors.push(`${field} must have at least ${rules.minItems} items`);
         }
 
         if (rules.maxItems && value.length > rules.maxItems) {
-          errors.push(`${field} must have less than ${rules.maxItems} items`);
+          errors.push(`${field} must have at most ${rules.maxItems} items`);
+        }
+
+        if (rules.itemType) {
+          const invalidItems = value.filter(item => typeof item !== rules.itemType);
+          if (invalidItems.length > 0) {
+            errors.push(`All items in ${field} must be ${rules.itemType}`);
+          }
         }
       }
 
-      // Custom validation
       if (rules.custom) {
         const customError = rules.custom(value);
         if (customError) {
@@ -85,17 +110,14 @@ const validateBody = (schema) => {
   };
 };
 
-// Validate pagination parameters
 const validatePagination = (req, res, next) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 20;
 
-  // Validate page
   if (page < 1) {
     return res.status(400).json({ msg: 'Page must be greater than 0' });
   }
 
-  // Validate and limit the limit
   if (limit < 1 || limit > 100) {
     return res.status(400).json({ msg: 'Limit must be between 1 and 100' });
   }
@@ -106,7 +128,6 @@ const validatePagination = (req, res, next) => {
   next();
 };
 
-// Validate file upload
 const validateFileUpload = (maxSize = 5 * 1024 * 1024) => {
   return (req, res, next) => {
     const { media } = req.body;
@@ -115,14 +136,12 @@ const validateFileUpload = (maxSize = 5 * 1024 * 1024) => {
       return next();
     }
 
-    // Validate media object
     if (!media.url || !media.type) {
       return res.status(400).json({ 
         msg: 'Invalid media format' 
       });
     }
 
-    // Validate media type
     const allowedTypes = ['image', 'video', 'audio', 'file'];
     if (!allowedTypes.includes(media.type)) {
       return res.status(400).json({ 
@@ -130,14 +149,12 @@ const validateFileUpload = (maxSize = 5 * 1024 * 1024) => {
       });
     }
 
-    // Validate size if provided
     if (media.size && media.size > maxSize) {
       return res.status(400).json({ 
         msg: `File size must be less than ${maxSize / (1024 * 1024)}MB` 
       });
     }
 
-    // Validate URL
     if (!validator.isURL(media.url)) {
       return res.status(400).json({ 
         msg: 'Invalid media URL' 
@@ -148,7 +165,6 @@ const validateFileUpload = (maxSize = 5 * 1024 * 1024) => {
   };
 };
 
-// Rate limiting by user
 const rateLimitByUser = (maxRequests = 100, windowMs = 60000) => {
   const requests = new Map();
 
@@ -162,7 +178,6 @@ const rateLimitByUser = (maxRequests = 100, windowMs = 60000) => {
 
     const userRequests = requests.get(userId);
     
-    // Remove old requests outside the window
     const validRequests = userRequests.filter(
       time => now - time < windowMs
     );
@@ -176,7 +191,6 @@ const rateLimitByUser = (maxRequests = 100, windowMs = 60000) => {
     validRequests.push(now);
     requests.set(userId, validRequests);
 
-    // Cleanup old entries periodically
     if (Math.random() < 0.01) {
       for (const [key, value] of requests.entries()) {
         if (value.length === 0 || now - value[value.length - 1] > windowMs) {
@@ -189,7 +203,6 @@ const rateLimitByUser = (maxRequests = 100, windowMs = 60000) => {
   };
 };
 
-// Validate MongoDB ObjectId
 const validateObjectId = (paramName) => {
   return (req, res, next) => {
     const id = req.params[paramName];

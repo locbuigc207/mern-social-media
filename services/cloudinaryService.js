@@ -18,13 +18,24 @@ const uploadToCloudinary = async (filePath, options = {}) => {
     } = options;
 
     let uploadPath = filePath;
+
+    try {
+      await fs.access(filePath);
+    } catch (error) {
+      throw new Error(`File not found: ${filePath}`);
+    }
+
     if (resourceType === 'image' || path.extname(filePath).match(/\.(jpg|jpeg|png|gif)$/i)) {
-      const optimized = await optimizeImage(filePath, {
-        maxWidth: 1920,
-        maxHeight: 1080,
-        quality: 85
-      });
-      uploadPath = optimized.optimizedPath;
+      try {
+        const optimized = await optimizeImage(filePath, {
+          maxWidth: 1920,
+          maxHeight: 1080,
+          quality: 85
+        });
+        uploadPath = optimized.optimizedPath;
+      } catch (optimizeError) {
+        console.warn('Image optimization failed, using original:', optimizeError.message);
+      }
     }
 
     const uploadOptions = {
@@ -40,10 +51,23 @@ const uploadToCloudinary = async (filePath, options = {}) => {
 
     const result = await cloudinary.uploader.upload(uploadPath, uploadOptions);
 
-    await fs.unlink(filePath).catch(() => {});
-    if (uploadPath !== filePath) {
-      await fs.unlink(uploadPath).catch(() => {});
-    }
+    const cleanupFiles = async () => {
+      try {
+        await fs.unlink(filePath);
+      } catch (err) {
+        console.warn(`Could not delete original file: ${filePath}`, err.message);
+      }
+
+      if (uploadPath !== filePath) {
+        try {
+          await fs.unlink(uploadPath);
+        } catch (err) {
+          console.warn(`Could not delete optimized file: ${uploadPath}`, err.message);
+        }
+      }
+    };
+
+    await cleanupFiles();
 
     return {
       success: true,
@@ -56,7 +80,10 @@ const uploadToCloudinary = async (filePath, options = {}) => {
       type: result.resource_type
     };
   } catch (error) {
-    await fs.unlink(filePath).catch(() => {});
+    try {
+      await fs.unlink(filePath);
+    } catch (cleanupError) {
+    }
     throw new Error(`Cloudinary upload failed: ${error.message}`);
   }
 };

@@ -3,17 +3,36 @@ const RedisStore = require('rate-limit-redis');
 const redis = require('redis');
 
 let redisClient = null;
+
 if (process.env.REDIS_URL) {
   redisClient = redis.createClient({
     url: process.env.REDIS_URL,
     legacyMode: true
   });
-  redisClient.connect().catch(console.error);
+
+  redisClient.connect().catch(err => {
+    console.error('Redis connection failed:', err);
+    redisClient = null;
+  });
+
+  const cleanupRedis = async () => {
+    if (redisClient) {
+      try {
+        await redisClient.quit();
+        console.log('Redis connection closed');
+      } catch (err) {
+        console.error('Error closing Redis:', err);
+      }
+    }
+  };
+
+  process.on('SIGTERM', cleanupRedis);
+  process.on('SIGINT', cleanupRedis);
 }
 
 const generalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, 
-  max: 100, 
+  windowMs: 15 * 60 * 1000,
+  max: 100,
   message: {
     msg: 'Too many requests from this IP, please try again later.',
     retryAfter: '15 minutes'
@@ -27,8 +46,8 @@ const generalLimiter = rateLimit({
 });
 
 const strictLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, 
-  max: 5, 
+  windowMs: 60 * 60 * 1000,
+  max: 5,
   message: {
     msg: 'Too many attempts, please try again later.',
     retryAfter: '1 hour'
@@ -41,8 +60,8 @@ const strictLimiter = rateLimit({
 });
 
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, 
-  max: 5, 
+  windowMs: 15 * 60 * 1000,
+  max: 5,
   message: {
     msg: 'Too many authentication attempts, please try again later.',
     retryAfter: '15 minutes'
@@ -55,8 +74,8 @@ const authLimiter = rateLimit({
 });
 
 const uploadLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, 
-  max: 50, 
+  windowMs: 60 * 60 * 1000,
+  max: 50,
   message: {
     msg: 'Upload limit exceeded, please try again later.',
     retryAfter: '1 hour'
@@ -68,8 +87,8 @@ const uploadLimiter = rateLimit({
 });
 
 const createPostLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, 
-  max: 20, 
+  windowMs: 60 * 60 * 1000,
+  max: 20,
   message: {
     msg: 'You are posting too frequently, please slow down.',
     retryAfter: '1 hour'
@@ -81,8 +100,8 @@ const createPostLimiter = rateLimit({
 });
 
 const messageLimiter = rateLimit({
-  windowMs: 60 * 1000, 
-  max: 30, 
+  windowMs: 60 * 1000,
+  max: 30,
   message: {
     msg: 'You are sending messages too quickly.',
     retryAfter: '1 minute'
@@ -107,7 +126,7 @@ const commentLimiter = rateLimit({
 });
 
 const followLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, 
+  windowMs: 60 * 60 * 1000,
   max: 100,
   message: {
     msg: 'Too many follow/unfollow actions.',
@@ -120,7 +139,7 @@ const followLimiter = rateLimit({
 });
 
 const searchLimiter = rateLimit({
-  windowMs: 60 * 1000, 
+  windowMs: 60 * 1000,
   max: 30,
   message: {
     msg: 'Too many search requests.',

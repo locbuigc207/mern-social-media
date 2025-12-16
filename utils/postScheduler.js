@@ -1,6 +1,12 @@
 const Posts = require("../models/postModel");
 const logger = require("./logger");
 
+let io = null;
+
+const setSocketIO = (socketIO) => {
+  io = socketIO;
+};
+
 const checkScheduledPosts = async () => {
   try {
     const now = new Date();
@@ -8,7 +14,7 @@ const checkScheduledPosts = async () => {
     const scheduledPosts = await Posts.find({
       status: 'scheduled',
       scheduledDate: { $lte: now }
-    }).populate('user', 'followers');
+    }).populate('user', 'followers username avatar');
 
     if (scheduledPosts.length === 0) {
       return;
@@ -23,9 +29,27 @@ const checkScheduledPosts = async () => {
         post.isDraft = false;
         post.publishedAt = now;
         await post.save();
-        
+
         successCount++;
-        logger.info('Published scheduled post', { 
+
+        if (io && post.user.followers) {
+          io.emit('scheduledPostPublished', {
+            post: {
+              _id: post._id,
+              user: {
+                _id: post.user._id,
+                username: post.user.username,
+                avatar: post.user.avatar,
+                followers: post.user.followers
+              },
+              content: post.content,
+              images: post.images,
+              publishedAt: post.publishedAt
+            }
+          });
+        }
+
+        logger.info('Published scheduled post', {
           postId: post._id,
           userId: post.user._id,
           scheduledDate: post.scheduledDate
@@ -43,18 +67,22 @@ const checkScheduledPosts = async () => {
       logger.info(` Published ${successCount} scheduled post(s)`);
     }
     if (errorCount > 0) {
-      logger.warn(`  Failed to publish ${errorCount} scheduled post(s)`);
+      logger.warn(`⚠️ Failed to publish ${errorCount} scheduled post(s)`);
     }
   } catch (error) {
     logger.error('Error in checkScheduledPosts', error);
   }
 };
 
-const startScheduler = () => {
+const startScheduler = (socketIO) => {
+  if (socketIO) {
+    setSocketIO(socketIO);
+  }
+
   logger.info(' Post scheduler started');
-  
+
   checkScheduledPosts();
-  
+
   const schedulerInterval = setInterval(checkScheduledPosts, 60 * 1000);
 
   process.on('SIGTERM', () => {
@@ -68,4 +96,4 @@ const startScheduler = () => {
   });
 };
 
-module.exports = { startScheduler, checkScheduledPosts };
+module.exports = { startScheduler, checkScheduledPosts, setSocketIO };

@@ -37,7 +37,7 @@ const authCtrl = {
       const passwordHash = await bcrypt.hash(password, 12);
 
       const verificationToken = crypto.randomBytes(32).toString("hex");
-      const verificationTokenExpires = Date.now() + 24 * 60 * 60 * 1000; 
+      const verificationTokenExpires = Date.now() + 24 * 60 * 60 * 1000;
 
       const newUser = new Users({
         fullname,
@@ -314,7 +314,7 @@ const authCtrl = {
         password: passwordHash,
         gender,
         role,
-        isVerified: true, 
+        isVerified: true,
       });
 
       await newUser.save();
@@ -335,12 +335,20 @@ const authCtrl = {
       );
 
       if (!user) {
-        return res.status(400).json({ msg: "Email or Password is incorrect." });
+        return res.status(400).json({ msg: "Invalid credentials." });
       }
 
       const isMatch = await bcrypt.compare(password, user.password);
       if (!isMatch) {
-        return res.status(400).json({ msg: "Email or Password is incorrect." });
+        return res.status(400).json({ msg: "Invalid credentials." });
+      }
+
+      if (user.isBlocked) {
+        return res.status(403).json({
+          msg: "Your account has been blocked.",
+          reason: user.blockedReason,
+          isBlocked: true,
+        });
       }
 
       if (!user.isVerified) {
@@ -357,6 +365,7 @@ const authCtrl = {
         httpOnly: true,
         path: "/api/refresh_token",
         sameSite: "lax",
+        secure: process.env.NODE_ENV === "production", // FIX: Thêm secure flag
         maxAge: 30 * 24 * 60 * 60 * 1000,
       });
 
@@ -431,7 +440,7 @@ const authCtrl = {
         process.env.REFRESH_TOKEN_SECRET,
         async (err, result) => {
           if (err) {
-            res.status(400).json({ msg: "Please login again." });
+            return res.status(400).json({ msg: "Please login again." });
           }
 
           const user = await Users.findById(result.id)
@@ -439,7 +448,7 @@ const authCtrl = {
             .populate("followers following", "-password");
 
           if (!user) {
-            res.status(400).json({ msg: "User does not exist." });
+            return res.status(400).json({ msg: "User does not exist." });
           }
 
           const access_token = createAccessToken({ id: result.id });

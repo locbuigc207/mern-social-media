@@ -29,7 +29,7 @@ const userCtrl = {
         return res.status(403).json({ msg: "You are blocked by this user." });
       }
 
-      if (user.privacySettings.profileVisibility === 'private') {
+      if (user.privacySettings.profileVisibility === "private") {
         const isFollowing = user.followers.some(
           (follower) => follower._id.toString() === req.user._id.toString()
         );
@@ -37,16 +37,20 @@ const userCtrl = {
           (following) => following._id.toString() === req.user._id.toString()
         );
 
-        if (!isFollowing && !isFollower && user._id.toString() !== req.user._id.toString()) {
+        if (
+          !isFollowing &&
+          !isFollower &&
+          user._id.toString() !== req.user._id.toString()
+        ) {
           return res.json({
             user: {
               _id: user._id,
               username: user.username,
               fullname: user.fullname,
               avatar: user.avatar,
-              privacySettings: { profileVisibility: 'private' }
+              privacySettings: { profileVisibility: "private" },
             },
-            message: "This account is private"
+            message: "This account is private",
           });
         }
       }
@@ -99,7 +103,7 @@ const userCtrl = {
         whoCanComment,
         whoCanTag,
         showFollowers,
-        showFollowing
+        showFollowing,
       } = req.body;
 
       const privacySettings = {};
@@ -108,18 +112,20 @@ const userCtrl = {
       if (whoCanMessage) privacySettings.whoCanMessage = whoCanMessage;
       if (whoCanComment) privacySettings.whoCanComment = whoCanComment;
       if (whoCanTag) privacySettings.whoCanTag = whoCanTag;
-      if (typeof showFollowers !== 'undefined') privacySettings.showFollowers = showFollowers;
-      if (typeof showFollowing !== 'undefined') privacySettings.showFollowing = showFollowing;
+      if (typeof showFollowers !== "undefined")
+        privacySettings.showFollowers = showFollowers;
+      if (typeof showFollowing !== "undefined")
+        privacySettings.showFollowing = showFollowing;
 
       const user = await Users.findByIdAndUpdate(
         req.user._id,
         { $set: { privacySettings } },
         { new: true }
-      ).select('-password');
+      ).select("-password");
 
       res.json({
         msg: "Privacy settings updated successfully.",
-        privacySettings: user.privacySettings
+        privacySettings: user.privacySettings,
       });
     } catch (err) {
       return res.status(500).json({ msg: err.message });
@@ -128,7 +134,7 @@ const userCtrl = {
 
   getPrivacySettings: async (req, res) => {
     try {
-      const user = await Users.findById(req.user._id).select('privacySettings');
+      const user = await Users.findById(req.user._id).select("privacySettings");
 
       res.json({ privacySettings: user.privacySettings });
     } catch (err) {
@@ -156,12 +162,12 @@ const userCtrl = {
 
       await Users.findByIdAndUpdate(req.user._id, {
         $push: { blockedUsers: id },
-        $pull: { following: id, followers: id }
+        $pull: { following: id, followers: id },
       });
 
       await Users.findByIdAndUpdate(id, {
-        $push: { blockedByUsers: req.user._id }, 
-        $pull: { following: req.user._id, followers: req.user._id }
+        $push: { blockedByUsers: req.user._id },
+        $pull: { following: req.user._id, followers: req.user._id },
       });
 
       res.json({ msg: "User blocked successfully." });
@@ -175,11 +181,11 @@ const userCtrl = {
       const { id } = req.params;
 
       await Users.findByIdAndUpdate(req.user._id, {
-        $pull: { blockedUsers: id }
+        $pull: { blockedUsers: id },
       });
 
       await Users.findByIdAndUpdate(id, {
-        $pull: { blockedByUsers: req.user._id } 
+        $pull: { blockedByUsers: req.user._id },
       });
 
       res.json({ msg: "User unblocked successfully." });
@@ -191,8 +197,8 @@ const userCtrl = {
   getBlockedUsers: async (req, res) => {
     try {
       const user = await Users.findById(req.user._id)
-        .populate('blockedUsers', 'username fullname avatar')
-        .select('blockedUsers');
+        .populate("blockedUsers", "username fullname avatar")
+        .select("blockedUsers");
 
       res.json({ blockedUsers: user.blockedUsers });
     } catch (err) {
@@ -204,7 +210,9 @@ const userCtrl = {
     try {
       const { id } = req.params;
 
-      const currentUser = await Users.findById(req.user._id).select('blockedUsers');
+      const currentUser = await Users.findById(req.user._id).select(
+        "blockedUsers"
+      );
       const isBlocked = currentUser.blockedUsers.includes(id);
 
       res.json({ isBlocked });
@@ -275,18 +283,27 @@ const userCtrl = {
 
   suggestionsUser: async (req, res) => {
     try {
-      const currentUser = await Users.findById(req.user._id);
-      
+      const currentUser = await Users.findById(req.user._id)
+        .select("following blockedUsers blockedByUsers")
+        .lean();
+
       const newArr = [
-        ...req.user.following,
+        ...currentUser.following,
         req.user._id,
-        ...currentUser.blockedUsers, 
-        ...currentUser.blockedByUsers 
+        ...currentUser.blockedUsers,
+        ...currentUser.blockedByUsers,
       ];
 
-      const num = req.query.num || 10;
+      const num = parseInt(req.query.num) || 10;
+
       const users = await Users.aggregate([
-        { $match: { _id: { $nin: newArr } } },
+        {
+          $match: {
+            _id: { $nin: newArr },
+            role: "user", 
+            isBlocked: false, 
+          },
+        },
         { $sample: { size: Number(num) } },
         {
           $lookup: {
@@ -304,7 +321,14 @@ const userCtrl = {
             as: "following",
           },
         },
-      ]).project("-password");
+        {
+          $project: {
+            password: 0,
+            resetPasswordToken: 0,
+            verificationToken: 0,
+          },
+        },
+      ]);
 
       return res.json({
         users,

@@ -31,6 +31,7 @@ const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const jwt = require('jsonwebtoken');
 const SocketServer = require('./socketServer');
 const { startScheduler } = require('./utils/postScheduler');
 const { startCleanupSchedulers } = require('./utils/cleanupScheduler');
@@ -86,7 +87,24 @@ const io = require('socket.io')(http, {
   }
 });
 
+io.use((socket, next) => {
+  const token = socket.handshake.auth.token;
+  
+  if (!token) {
+    return next(new Error('Authentication error'));
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
+    socket.userId = decoded.id;
+    next();
+  } catch (err) {
+    next(new Error('Authentication error'));
+  }
+});
+
 io.on('connection', socket => {
+  console.log(` Socket connected: ${socket.userId}`);
   SocketServer(socket);
 });
 
@@ -124,16 +142,12 @@ app.get('/api/health', async (req, res) => {
     health.status = 'unhealthy';
   }
 
-
   const statusCode = health.status === 'ok' ? 200 : 503;
   res.status(statusCode).json(health);
 });
 
 app.use(notFound);
-
 app.use(errorHandler);
-
-
 
 const URI = process.env.MONGODB_URL;
 mongoose.connect(URI, {
@@ -146,7 +160,7 @@ mongoose.connect(URI, {
   }
   logger.info(' Database Connected!');
   
-  startScheduler();
+  startScheduler(io); 
   startCleanupSchedulers();
 });
 

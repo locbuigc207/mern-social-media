@@ -162,5 +162,9 @@ userSchema.index({ username: 1 });
 userSchema.index({ email: 1 });
 userSchema.index({ isBlocked: 1 });
 userSchema.index({ role: 1 });
+userSchema.index({ username: 'text', fullname: 'text' }); 
+userSchema.index({ role: 1, isBlocked: 1 }); 
+userSchema.index({ following: 1, followers: 1 }); 
+userSchema.index({ isVerified: 1, role: 1 }); 
 
 module.exports = mongoose.model('user', userSchema);

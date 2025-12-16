@@ -56,5 +56,7 @@ postSchema.index({ user: 1, createdAt: -1 });
 postSchema.index({ status: 1, scheduledDate: 1 });
 postSchema.index({ status: 1, isDraft: 1 });
 postSchema.index({ user: 1, status: 1, isDraft: 1 });
+postSchema.index({ user: 1, status: 1, isDraft: 1, createdAt: -1 }); 
+postSchema.index({ status: 1, createdAt: -1 }); 
 
 module.exports = mongoose.model("post", postSchema);
