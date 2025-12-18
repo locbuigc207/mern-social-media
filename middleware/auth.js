@@ -1,54 +1,215 @@
-const Users = require('../models/userModel');
-const jwt = require('jsonwebtoken');
+const Users = require("../models/userModel");
+const jwt = require("jsonwebtoken");
+const { AuthenticationError, AuthorizationError } = require('../utils/AppError');
+const logger = require('../utils/logger');
 
 const auth = async (req, res, next) => {
   try {
     const token = req.header("Authorization");
 
     if (!token) {
-      return res.status(401).json({ msg: "You are not authorized" });
+      throw new AuthenticationError("Authentication required. Please login.");
     }
 
     const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
 
     if (!decoded) {
-      return res.status(401).json({ msg: "You are not authorized" });
+      throw new AuthenticationError("Invalid authentication token.");
     }
 
-    const user = await Users.findOne({ _id: decoded.id });
+    const user = await Users.findOne({ _id: decoded.id }).select("-password");
 
     if (!user) {
-      return res.status(404).json({ msg: "User not found" });
+      throw new AuthenticationError("User not found. Please login again.");
     }
 
-    if (user.isBlocked && user.role !== 'admin') {
-      return res.status(403).json({ 
-        msg: "Your account has been blocked by admin",
-        reason: user.blockedReason,
-        blockedAt: user.blockedAt,
-        isBlocked: true
+    // Check if account is blocked
+    if (user.isBlocked) {
+      logger.warn('Blocked user attempted access', {
+        userId: user._id,
+        username: user.username
       });
+      throw new AuthorizationError(
+        user.blockedReason || "Your account has been blocked. Please contact support."
+      );
     }
 
-    const publicRoutes = ['/api/verify-email', '/api/resend-verification', '/api/logout'];
-    if (!user.isVerified && user.role === 'user' && !publicRoutes.includes(req.path)) {
-      return res.status(403).json({ 
-        msg: "Please verify your email first",
-        requireVerification: true
-      });
+    // Check if account is verified (if verification is required)
+    if (process.env.REQUIRE_EMAIL_VERIFICATION === 'true' && !user.isVerified) {
+      throw new AuthorizationError("Please verify your email before accessing this resource.");
     }
 
     req.user = user;
     next();
   } catch (err) {
-    if (err.name === 'TokenExpiredError') {
-      return res.status(401).json({ msg: "Token expired. Please login again." });
-    }
     if (err.name === 'JsonWebTokenError') {
-      return res.status(401).json({ msg: "Invalid token. Please login again." });
+      return next(new AuthenticationError("Invalid token. Please login again."));
     }
-    return res.status(500).json({ msg: err.message });
+    
+    if (err.name === 'TokenExpiredError') {
+      return next(new AuthenticationError("Token expired. Please login again."));
+    }
+
+    next(err);
   }
 };
 
-module.exports = auth;
+// Middleware to check if user is admin
+const checkAdmin = async (req, res, next) => {
+  try {
+    if (!req.user) {
+      throw new AuthenticationError("Authentication required.");
+    }
+
+    if (req.user.role !== 'admin') {
+      logger.warn('Non-admin attempted admin access', {
+        userId: req.user._id,
+        username: req.user.username
+      });
+      throw new AuthorizationError("Admin access required.");
+    }
+
+    logger.info('Admin access granted', {
+      adminId: req.user._id,
+      username: req.user.username
+    });
+
+    next();
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Middleware to check if user is moderator or admin
+const checkModerator = async (req, res, next) => {
+  try {
+    if (!req.user) {
+      throw new AuthenticationError("Authentication required.");
+    }
+
+    if (req.user.role !== 'admin' && req.user.role !== 'moderator') {
+      logger.warn('Non-moderator attempted moderator access', {
+        userId: req.user._id,
+        username: req.user.username
+      });
+      throw new AuthorizationError("Moderator or admin access required.");
+    }
+
+    next();
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Middleware to check if user owns the resource or is admin
+const checkOwnerOrAdmin = (resourceModel, resourceIdParam = 'id') => {
+  return async (req, res, next) => {
+    try {
+      const resourceId = req.params[resourceIdParam];
+      const resource = await resourceModel.findById(resourceId);
+
+      if (!resource) {
+        throw new NotFoundError(resourceModel.modelName);
+      }
+
+      const isOwner = resource.user.toString() === req.user._id.toString();
+      const isAdmin = req.user.role === 'admin';
+
+      if (!isOwner && !isAdmin) {
+        throw new AuthorizationError("You don't have permission to access this resource.");
+      }
+
+      req.resource = resource;
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
+};
+
+// Middleware to check if email is verified
+const checkEmailVerified = async (req, res, next) => {
+  try {
+    if (!req.user.isVerified) {
+      throw new AuthorizationError(
+        "Please verify your email address to access this feature."
+      );
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Optional auth - doesn't fail if no token, just sets req.user if valid token exists
+const optionalAuth = async (req, res, next) => {
+  try {
+    const token = req.header("Authorization");
+
+    if (!token) {
+      return next();
+    }
+
+    const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
+
+    if (decoded) {
+      const user = await Users.findOne({ _id: decoded.id }).select("-password");
+      
+      if (user && !user.isBlocked) {
+        req.user = user;
+      }
+    }
+
+    next();
+  } catch (err) {
+    // Silently fail for optional auth
+    next();
+  }
+};
+
+// Middleware to refresh token if it's about to expire
+const refreshTokenIfNeeded = async (req, res, next) => {
+  try {
+    const token = req.header("Authorization");
+
+    if (!token) {
+      return next();
+    }
+
+    const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, {
+      ignoreExpiration: true
+    });
+
+    // Check if token expires in less than 5 minutes
+    const expiresIn = decoded.exp - Math.floor(Date.now() / 1000);
+    
+    if (expiresIn < 300 && expiresIn > 0) {
+      // Generate new token
+      const newToken = jwt.sign(
+        { id: decoded.id },
+        process.env.ACCESS_TOKEN_SECRET,
+        { expiresIn: '1d' }
+      );
+
+      res.setHeader('X-New-Token', newToken);
+      
+      logger.info('Token refreshed', {
+        userId: decoded.id
+      });
+    }
+
+    next();
+  } catch (err) {
+    next();
+  }
+};
+
+module.exports = {
+  auth,
+  checkAdmin,
+  checkModerator,
+  checkOwnerOrAdmin,
+  checkEmailVerified,
+  optionalAuth,
+  refreshTokenIfNeeded
+};

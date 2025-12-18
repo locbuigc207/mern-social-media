@@ -1,7 +1,6 @@
-const mongoose = require('mongoose');
-const { Schema } = mongoose;
+const mongoose = require("mongoose");
 
-const userSchema = new Schema(
+const userSchema = new mongoose.Schema(
   {
     fullname: {
       type: String,
@@ -29,15 +28,17 @@ const userSchema = new Schema(
     avatar: {
       type: String,
       default:
-        "https://cdn.pixabay.com/photo/2015/10/05/22/37/blank-profile-picture-973460__340.png",
+        "https://res.cloudinary.com/devatchannel/image/upload/v1602752402/avatar/avatar_cugq40.png",
     },
     role: {
       type: String,
       default: "user",
+      enum: ["user", "admin", "moderator"],
     },
     gender: {
       type: String,
       default: "male",
+      enum: ["male", "female", "other"],
     },
     mobile: {
       type: String,
@@ -47,12 +48,6 @@ const userSchema = new Schema(
       type: String,
       default: "",
     },
-    saved: [
-      {
-        type: mongoose.Types.ObjectId,
-        ref: 'post'
-      }
-    ],
     story: {
       type: String,
       default: "",
@@ -74,7 +69,19 @@ const userSchema = new Schema(
         ref: "user",
       },
     ],
-    closeFriends: [
+    saved: [
+      {
+        type: mongoose.Types.ObjectId,
+        ref: "post",
+      },
+    ],
+    blockedUsers: [
+      {
+        type: mongoose.Types.ObjectId,
+        ref: "user",
+      },
+    ],
+    blockedBy: [
       {
         type: mongoose.Types.ObjectId,
         ref: "user",
@@ -84,87 +91,105 @@ const userSchema = new Schema(
       type: Boolean,
       default: false,
     },
-    verificationToken: {
-      type: String,
+    verificationToken: String,
+    verificationTokenExpires: Date,
+    isBlocked: {
+      type: Boolean,
+      default: false,
     },
-    verificationTokenExpires: {
-      type: Date,
+    blockedReason: String,
+    blockedByAdmin: {
+      type: mongoose.Types.ObjectId,
+      ref: "user",
     },
-    resetPasswordToken: {
-      type: String,
+    blockedAt: Date,
+    resetPasswordToken: String,
+    resetPasswordExpires: Date,
+    // ✅ NEW FIELD - Track password reset attempts
+    resetAttempts: {
+      type: Number,
+      default: 0,
     },
-    resetPasswordExpires: {
-      type: Date,
-    },
-    blockedUsers: [
-      {
-        type: mongoose.Types.ObjectId,
-        ref: "user",
-      },
-    ],
-    blockedByUsers: [
-      {
-        type: mongoose.Types.ObjectId,
-        ref: "user",
-      },
-    ],
+    lastResetAttempt: Date,
     privacySettings: {
       profileVisibility: {
         type: String,
-        enum: ['public', 'private', 'friends'],
-        default: 'public'
+        enum: ["public", "private", "friends"],
+        default: "public",
       },
       whoCanMessage: {
         type: String,
-        enum: ['everyone', 'following', 'none'],
-        default: 'everyone'
+        enum: ["everyone", "following", "none"],
+        default: "everyone",
       },
       whoCanComment: {
         type: String,
-        enum: ['everyone', 'following', 'none'],
-        default: 'everyone'
+        enum: ["everyone", "following", "none"],
+        default: "everyone",
       },
       whoCanTag: {
         type: String,
-        enum: ['everyone', 'following', 'none'],
-        default: 'everyone'
+        enum: ["everyone", "following", "none"],
+        default: "everyone",
       },
       showFollowers: {
         type: Boolean,
-        default: true
+        default: true,
       },
       showFollowing: {
         type: Boolean,
-        default: true
-      }
+        default: true,
+      },
     },
-    isBlocked: {
+    lastActive: {
+      type: Date,
+      default: Date.now,
+    },
+    twoFactorEnabled: {
       type: Boolean,
-      default: false
+      default: false,
     },
-    blockedReason: {
-      type: String
-    },
-    blockedByAdmin: {
-      type: mongoose.Types.ObjectId,
-      ref: "user"
-    },
-    blockedAt: {
-      type: Date
-    }
+    twoFactorSecret: String,
   },
   {
     timestamps: true,
   }
 );
 
+// ✅ Indexes for better query performance
 userSchema.index({ username: 1 });
 userSchema.index({ email: 1 });
-userSchema.index({ isBlocked: 1 });
-userSchema.index({ role: 1 });
-userSchema.index({ username: 'text', fullname: 'text' }); 
-userSchema.index({ role: 1, isBlocked: 1 }); 
-userSchema.index({ following: 1, followers: 1 }); 
-userSchema.index({ isVerified: 1, role: 1 }); 
+userSchema.index({ role: 1, isBlocked: 1 });
+userSchema.index({ followers: 1 });
+userSchema.index({ following: 1 });
+userSchema.index({ createdAt: -1 });
 
-module.exports = mongoose.model('user', userSchema);
+// Instance method to check if user can reset password
+userSchema.methods.canResetPassword = function() {
+  if (this.resetAttempts >= 5) {
+    // Check if 60 minutes have passed since last attempt
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    if (this.lastResetAttempt && this.lastResetAttempt > oneHourAgo) {
+      return false;
+    }
+    // Reset attempts after cooldown period
+    this.resetAttempts = 0;
+  }
+  return true;
+};
+
+// Instance method to increment reset attempts
+userSchema.methods.incrementResetAttempts = async function() {
+  this.resetAttempts += 1;
+  this.lastResetAttempt = new Date();
+  await this.save();
+};
+
+// Instance method to reset attempts counter
+userSchema.methods.resetPasswordAttempts = async function() {
+  this.resetAttempts = 0;
+  this.lastResetAttempt = undefined;
+  await this.save();
+};
+
+module.exports = mongoose.model("user", userSchema);

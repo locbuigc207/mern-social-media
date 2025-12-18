@@ -1,204 +1,200 @@
-require('dotenv').config();
+require("dotenv").config();
+const express = require("express");
+const mongoose = require("mongoose");
+const cors = require("cors");
+const cookieParser = require("cookie-parser");
+const path = require("path");
+const { createServer } = require("http");
+const SocketServer = require("./socketServer");
+const logger = require("./utils/logger");
 
-const validateEnv = () => {
-  const required = [
-    'MONGODB_URL',
-    'ACCESS_TOKEN_SECRET',
-    'REFRESH_TOKEN_SECRET',
-    'CLOUDINARY_CLOUD_NAME',
-    'CLOUDINARY_API_KEY',
-    'CLOUDINARY_API_SECRET',
-    'EMAIL_USERNAME',
-    'EMAIL_PASSWORD'
-  ];
+// ✅ Import shutdown manager and schedulers
+const shutdownManager = require("./utils/shutdown");
+const { startPostScheduler, stopScheduler: stopPostScheduler } = require("./utils/postScheduler");
+const { startCleanupSchedulers, stopCleanupSchedulers } = require("./utils/cleanupScheduler");
+const { closeRateLimiter } = require("./middleware/rateLimiter");
 
-  const missing = required.filter(key => !process.env[key]);
-  
-  if (missing.length > 0) {
-    console.error(' Missing required environment variables:', missing.join(', '));
-    console.error('Please check your .env file and ensure all required variables are set.');
-    process.exit(1);
-  }
-  
-  console.log(' Environment variables validated');
-};
-
-validateEnv();
-
-const express = require('express');
-const mongoose = require('mongoose');
-const cors = require('cors');
-const cookieParser = require('cookie-parser');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
-const jwt = require('jsonwebtoken');
-const SocketServer = require('./socketServer');
-const { startScheduler } = require('./utils/postScheduler');
-const { startCleanupSchedulers } = require('./utils/cleanupScheduler');
-const logger = require('./utils/logger');
-const { errorHandler, notFound } = require('./middleware/errorHandler');
+// ✅ Import centralized error handler
+const { errorHandler } = require("./middleware/errorHandler");
 
 const app = express();
 
-app.use(helmet({
-  contentSecurityPolicy: false,
-  crossOriginEmbedderPolicy: false
+// Middleware
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+app.use(cors({
+  origin: process.env.CLIENT_URL || "http://localhost:3000",
+  credentials: true
 }));
-app.disable('x-powered-by');
-
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  message: { msg: 'Too many requests from this IP, please try again later.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-const corsOptions = {
-  origin: process.env.CLIENT_URL || 'http://localhost:3000',
-  credentials: true,
-};
-
-app.use((req, res, next) => {
-  const start = Date.now();
-  
-  res.on('finish', () => {
-    const duration = Date.now() - start;
-    const userId = req.user?._id || 'anonymous'; 
-    logger.request(req.method, req.originalUrl, userId, res.statusCode, duration);
-  });
-  
-  next();
-});
-
-app.use(express.json({ limit: '10mb' }));
-app.options("*", cors(corsOptions));
-app.use(cors(corsOptions));
 app.use(cookieParser());
-app.use('/api/', limiter);
 
-const http = require('http').createServer(app);
+// Static files
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-const io = require('socket.io')(http, {
-  cors: {
-    origin: process.env.CLIENT_URL || "http://localhost:3000",
-    methods: ["GET", "POST"],
-    credentials: true
-  }
-});
-
-io.use((socket, next) => {
-  const token = socket.handshake.auth.token;
-  
-  if (!token) {
-    return next(new Error('Authentication error'));
-  }
-
-  try {
-    const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
-    socket.userId = decoded.id;
-    next();
-  } catch (err) {
-    next(new Error('Authentication error'));
-  }
-});
-
-io.on('connection', socket => {
-  console.log(` Socket connected: ${socket.userId}`);
-  SocketServer(socket);
-});
-
-app.use('/api', require('./routes/authRouter'));
-app.use('/api', require('./routes/userRouter'));
-app.use('/api', require('./routes/postRouter'));
-app.use('/api', require('./routes/commentRouter'));
-app.use('/api', require('./routes/adminRouter'));
-app.use('/api', require('./routes/notifyRouter'));
-app.use('/api', require('./routes/messageRouter'));
-app.use('/api', require('./routes/storyRouter'));
-app.use('/api', require('./routes/groupRouter'));
-app.use('/api', require('./routes/hashtagRouter'));
-
-app.get('/api/health', async (req, res) => {
-  const health = {
-    status: 'ok',
+// Health check endpoint
+app.get("/health", (req, res) => {
+  res.json({
+    status: "ok",
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    services: {
-      database: 'unknown',
-      redis: 'unknown'
-    }
-  };
-
-  try {
-    if (mongoose.connection.readyState === 1) {
-      health.services.database = 'connected';
-    } else {
-      health.services.database = 'disconnected';
-      health.status = 'degraded';
-    }
-  } catch (error) {
-    health.services.database = 'error';
-    health.status = 'unhealthy';
-  }
-
-  const statusCode = health.status === 'ok' ? 200 : 503;
-  res.status(statusCode).json(health);
+    environment: process.env.NODE_ENV
+  });
 });
 
-app.use(notFound);
+// API Routes
+app.use("/api", require("./routes/authRouter"));
+app.use("/api", require("./routes/userRouter"));
+app.use("/api", require("./routes/postRouter"));
+app.use("/api", require("./routes/commentRouter"));
+app.use("/api", require("./routes/notifyRouter"));
+app.use("/api", require("./routes/messageRouter"));
+app.use("/api", require("./routes/adminRouter"));
+app.use("/api", require("./routes/storyRouter"));
+app.use("/api", require("./routes/groupRouter"));
+app.use("/api", require("./routes/hashtagRouter"));
+
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({
+    status: "error",
+    message: "Route not found",
+    path: req.originalUrl
+  });
+});
+
+// ✅ Use centralized error handler
 app.use(errorHandler);
 
-const URI = process.env.MONGODB_URL;
-mongoose.connect(URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true
-}, err => {
-  if (err) {
-    logger.error('Database connection failed', err);
-    throw err;
-  }
-  logger.info(' Database Connected!');
-  
-  startScheduler(io); 
-  startCleanupSchedulers();
-});
-
-const port = process.env.PORT || 8080;
-http.listen(port, () => {
-  logger.info(` Server listening on port ${port}`);
-});
-
-const gracefulShutdown = (signal) => {
-  console.log(`\n${signal} signal received: closing HTTP server`);
-  logger.info(`${signal} signal received: closing HTTP server`);
-  
-  http.close(() => {
-    logger.info('HTTP server closed');
-    
-    mongoose.connection.close(false, () => {
-      logger.info('MongoDB connection closed');
-      process.exit(0);
+// Database Connection
+const connectDB = async () => {
+  try {
+    await mongoose.connect(process.env.MONGODB_URL, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
     });
-  });
-
-  setTimeout(() => {
-    console.error('Could not close connections in time, forcefully shutting down');
+    logger.info("MongoDB Connected Successfully");
+  } catch (error) {
+    logger.error("MongoDB Connection Error:", error);
     process.exit(1);
-  }, 10000);
+  }
 };
 
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+// Mongoose connection events
+mongoose.connection.on("connected", () => {
+  logger.info("Mongoose connected to DB");
+});
 
+mongoose.connection.on("error", (err) => {
+  logger.error("Mongoose connection error:", err);
+});
+
+mongoose.connection.on("disconnected", () => {
+  logger.warn("Mongoose disconnected from DB");
+});
+
+// Create HTTP server
+const httpServer = createServer(app);
+
+// Initialize Socket.IO
+SocketServer(httpServer);
+
+// Start Server
+const PORT = process.env.PORT || 5000;
+
+const startServer = async () => {
+  try {
+    // Connect to database
+    await connectDB();
+
+    // Start HTTP server
+    const server = httpServer.listen(PORT, () => {
+      logger.info(`Server is running on port ${PORT}`);
+      logger.info(`Environment: ${process.env.NODE_ENV}`);
+    });
+
+    // ✅ Register resources for graceful shutdown
+    shutdownManager.register('http', async () => {
+      return new Promise((resolve) => {
+        server.close(() => {
+          logger.info('HTTP server closed');
+          resolve();
+        });
+      });
+    });
+
+    shutdownManager.register('mongodb', async () => {
+      await mongoose.connection.close(false);
+      logger.info('MongoDB connection closed');
+    });
+
+    shutdownManager.register('redis', async () => {
+      await closeRateLimiter();
+      logger.info('Redis connection closed');
+    });
+
+    shutdownManager.register('postScheduler', async () => {
+      await stopPostScheduler();
+      logger.info('Post scheduler stopped');
+    });
+
+    shutdownManager.register('cleanupSchedulers', async () => {
+      stopCleanupSchedulers();
+      logger.info('Cleanup schedulers stopped');
+    });
+
+    // Start schedulers
+    await startPostScheduler();
+    startCleanupSchedulers();
+
+    logger.info('All systems initialized successfully');
+  } catch (error) {
+    logger.error('Failed to start server:', error);
+    process.exit(1);
+  }
+};
+
+// ✅ Graceful shutdown handlers
+const shutdown = async (signal) => {
+  logger.info(`${signal} received. Starting graceful shutdown...`);
+  
+  try {
+    await shutdownManager.shutdown();
+    logger.info('Graceful shutdown completed');
+    process.exit(0);
+  } catch (error) {
+    logger.error('Error during shutdown:', error);
+    process.exit(1);
+  }
+};
+
+// Handle shutdown signals
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+// Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
-  console.error('Uncaught Exception:', error);
-  logger.error('Uncaught Exception', error);
-  process.exit(1);
+  logger.error('Uncaught Exception:', error);
+  shutdown('uncaughtException');
 });
 
+// Handle unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  logger.error('Unhandled Rejection', reason instanceof Error ? reason : new Error(String(reason))); 
-  process.exit(1);
+  logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  shutdown('unhandledRejection');
 });
+
+// ✅ Force exit after timeout
+const SHUTDOWN_TIMEOUT = 15000; // 15 seconds
+const forceShutdownTimer = setTimeout(() => {
+  logger.error('Forced shutdown after timeout');
+  process.exit(1);
+}, SHUTDOWN_TIMEOUT);
+
+// Don't keep the process running if this is the only timer
+forceShutdownTimer.unref();
+
+// Start the application
+startServer();
+
+// Export for testing
+module.exports = app;

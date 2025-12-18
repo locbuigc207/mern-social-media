@@ -1,19 +1,66 @@
 const router = require("express").Router();
 const auth = require("../middleware/auth");
 const messageCtrl = require("../controllers/messageCtrl");
+const validateObjectId = require("../middleware/validateObjectId");
 
-router.post("/message", auth, messageCtrl.createMessage);
+// Create message
+router.post("/message", 
+  auth, 
+  messageCtrl.createMessage
+);
 
-router.get("/conversations", auth, messageCtrl.getConversations);
+// Get conversations
+router.get("/conversations", 
+  auth, 
+  messageCtrl.getConversations
+);
 
-router.get("/message/:id", auth, messageCtrl.getMessages);
+// Get messages
+router.get("/message/:id", 
+  auth, 
+  validateObjectId('id'), 
+  messageCtrl.getMessages
+);
 
-router.patch("/message/:messageId/read", auth, messageCtrl.markAsRead);
-router.patch("/messages/:userId/read-all", auth, messageCtrl.markAllAsRead);
-router.delete("/message/:messageId", auth, messageCtrl.deleteMessage);
-router.delete("/conversation/:userId", auth, messageCtrl.deleteConversation);
+// Mark message as read
+router.patch("/message/:messageId/read", 
+  auth, 
+  validateObjectId('messageId'), 
+  messageCtrl.markAsRead
+);
 
-router.get("/messages/unread/count", auth, messageCtrl.getUnreadCount);
-router.get("/messages/:userId/unread", auth, messageCtrl.getUnreadByConversation);
+// Mark all as read
+router.patch("/messages/:userId/read-all", 
+  auth, 
+  validateObjectId('userId'), 
+  messageCtrl.markAllAsRead
+);
+
+// Delete message
+router.delete("/message/:messageId", 
+  auth, 
+  validateObjectId('messageId'), 
+  messageCtrl.deleteMessage
+);
+
+// Delete conversation
+router.delete("/conversation/:userId", 
+  auth, 
+  validateObjectId('userId'), 
+  messageCtrl.deleteConversation
+);
+
+// Get unread count
+router.get("/messages/unread/count", 
+  auth, 
+  messageCtrl.getUnreadCount
+);
+
+// Get unread by conversation
+router.get("/messages/:userId/unread", 
+  auth, 
+  validateObjectId('userId'), 
+  messageCtrl.getUnreadByConversation
+);
 
 module.exports = router;

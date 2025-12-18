@@ -2,77 +2,219 @@ const router = require("express").Router();
 const auth = require("../middleware/auth");
 const postCtrl = require("../controllers/postCtrl");
 const { uploadMultiple } = require("../middleware/upload");
-const { createPostLimiter, commentLimiter, generalLimiter } = require("../middleware/rateLimiter");
-const { validateBody, validateObjectId, validatePagination, rateLimitByUser } = require("../middleware/validation");
+const { createPostLimiter, generalLimiter } = require("../middleware/rateLimiter");
+const { validate } = require('../middleware/validate');
+const postSchemas = require('../schemas/postSchema');
+const validateObjectId = require('../middleware/validateObjectId');
+const { validatePagination } = require("../middleware/validation");
 
-const createPostSchema = {
-  content: { type: 'string', required: false, maxLength: 5000 },
-  status: {
-    type: 'string',
-    required: false,
-    custom: (value) => {
-      const validStatuses = ['published', 'draft', 'scheduled'];
-      if (value && !validStatuses.includes(value)) return 'Invalid status';
-    }
-  }
-};
+// Create post
+router.post("/posts", 
+  auth, 
+  createPostLimiter, 
+  uploadMultiple, 
+  validate(postSchemas.create), 
+  postCtrl.createPost
+);
 
-const reportPostSchema = {
-  reason: {
-    type: 'string',
-    required: true,
-    custom: (value) => {
-      const valid = ['spam', 'harassment', 'hate_speech', 'violence', 'nudity', 'false_information', 'scam', 'copyright', 'self_harm', 'terrorism', 'child_exploitation', 'other'];
-      if (!valid.includes(value)) return 'Invalid report reason';
-    }
-  },
-  description: { type: 'string', required: true, minLength: 10, maxLength: 500 },
-  priority: {
-    type: 'string',
-    required: false,
-    custom: (value) => {
-      const valid = ['low', 'medium', 'high', 'critical'];
-      if (value && !valid.includes(value)) return 'Invalid priority';
-    }
-  }
-};
+// Get posts feed
+router.get("/posts", 
+  auth, 
+  validatePagination, 
+  generalLimiter, 
+  postCtrl.getPosts
+);
 
-const hidePostSchema = {
-  reason: { type: 'string', required: false, maxLength: 200 }
-};
+// Update post
+router.patch("/post/:id", 
+  auth, 
+  validateObjectId('id'), 
+  uploadMultiple, 
+  validate(postSchemas.update), 
+  postCtrl.updatePost
+);
 
+// Get single post
+router.get("/post/:id", 
+  auth, 
+  validateObjectId('id'), 
+  generalLimiter, 
+  postCtrl.getPost
+);
 
-router.post("/posts", auth, createPostLimiter, uploadMultiple, validateBody(createPostSchema), postCtrl.createPost);
-router.get("/posts", auth, validatePagination, generalLimiter, postCtrl.getPosts);
-router.patch("/post/:id", auth, validateObjectId('id'), uploadMultiple, postCtrl.updatePost);
-router.get("/post/:id", auth, validateObjectId('id'), generalLimiter, postCtrl.getPost);
-router.delete("/post/:id", auth, validateObjectId('id'), postCtrl.deletePost);
+// Delete post
+router.delete("/post/:id", 
+  auth, 
+  validateObjectId('id'), 
+  postCtrl.deletePost
+);
 
-router.get("/drafts", auth, validatePagination, postCtrl.getDraftPosts);
-router.post("/draft", auth, uploadMultiple, validateBody(createPostSchema), postCtrl.saveDraft);
-router.patch("/draft/:id", auth, validateObjectId('id'), uploadMultiple, postCtrl.updateDraft);
-router.delete("/draft/:id", auth, validateObjectId('id'), postCtrl.deleteDraft);
-router.post("/draft/:id/publish", auth, validateObjectId('id'), postCtrl.publishDraft);
+// === DRAFTS ===
 
-router.get("/scheduled-posts", auth, validatePagination, postCtrl.getScheduledPosts);
-router.post("/schedule-post", auth, createPostLimiter, uploadMultiple, validateBody(createPostSchema), postCtrl.schedulePost);
-router.patch("/scheduled-post/:id", auth, validateObjectId('id'), uploadMultiple, postCtrl.updateScheduledPost);
-router.post("/scheduled-post/:id/cancel", auth, validateObjectId('id'), postCtrl.cancelScheduledPost);
+// Get drafts
+router.get("/drafts", 
+  auth, 
+  validatePagination, 
+  postCtrl.getDraftPosts
+);
 
-router.patch("/post/:id/like", auth, validateObjectId('id'), generalLimiter, postCtrl.likePost);
-router.patch("/post/:id/unlike", auth, validateObjectId('id'), generalLimiter, postCtrl.unLikePost);
+// Save draft
+router.post("/draft", 
+  auth, 
+  uploadMultiple, 
+  validate(postSchemas.create), 
+  postCtrl.saveDraft
+);
 
-router.patch("/post/:id/report", auth, validateObjectId('id'), rateLimitByUser(10, 60 * 60 * 1000), validateBody(reportPostSchema), postCtrl.reportPost);
-router.patch("/post/:id/hide", auth, validateObjectId('id'), validateBody(hidePostSchema), postCtrl.hidePost);
-router.patch("/post/:id/unhide", auth, validateObjectId('id'), postCtrl.unhidePost);
-router.get("/hidden-posts", auth, validatePagination, postCtrl.getHiddenPosts);
-router.post("/unhide-all-posts", auth, postCtrl.unhideAllPosts);
+// Update draft
+router.patch("/draft/:id", 
+  auth, 
+  validateObjectId('id'), 
+  uploadMultiple, 
+  validate(postSchemas.update), 
+  postCtrl.updateDraft
+);
 
-router.get("/user_posts/:id", auth, validateObjectId('id'), validatePagination, generalLimiter, postCtrl.getUserPosts);
-router.get("/post_discover", auth, generalLimiter, postCtrl.getPostDiscover);
+// Delete draft
+router.delete("/draft/:id", 
+  auth, 
+  validateObjectId('id'), 
+  postCtrl.deleteDraft
+);
 
-router.patch("/savePost/:id", auth, validateObjectId('id'), postCtrl.savePost);
-router.patch("/unSavePost/:id", auth, validateObjectId('id'), postCtrl.unSavePost);
-router.get("/getSavePosts", auth, validatePagination, postCtrl.getSavePost);
+// Publish draft
+router.post("/draft/:id/publish", 
+  auth, 
+  validateObjectId('id'), 
+  postCtrl.publishDraft
+);
+
+// === SCHEDULED POSTS ===
+
+// Get scheduled posts
+router.get("/scheduled-posts", 
+  auth, 
+  validatePagination, 
+  postCtrl.getScheduledPosts
+);
+
+// Schedule post
+router.post("/schedule-post", 
+  auth, 
+  createPostLimiter, 
+  uploadMultiple, 
+  validate(postSchemas.schedule), 
+  postCtrl.schedulePost
+);
+
+// Update scheduled post
+router.patch("/scheduled-post/:id", 
+  auth, 
+  validateObjectId('id'), 
+  uploadMultiple, 
+  postCtrl.updateScheduledPost
+);
+
+// Cancel scheduled post
+router.post("/scheduled-post/:id/cancel", 
+  auth, 
+  validateObjectId('id'), 
+  postCtrl.cancelScheduledPost
+);
+
+// === INTERACTIONS ===
+
+// Like post
+router.patch("/post/:id/like", 
+  auth, 
+  validateObjectId('id'), 
+  generalLimiter, 
+  postCtrl.likePost
+);
+
+// Unlike post
+router.patch("/post/:id/unlike", 
+  auth, 
+  validateObjectId('id'), 
+  generalLimiter, 
+  postCtrl.unLikePost
+);
+
+// Report post
+router.patch("/post/:id/report", 
+  auth, 
+  validateObjectId('id'), 
+  validate(postSchemas.report), 
+  postCtrl.reportPost
+);
+
+// Hide post
+router.patch("/post/:id/hide", 
+  auth, 
+  validateObjectId('id'), 
+  validate(postSchemas.hide), 
+  postCtrl.hidePost
+);
+
+// Unhide post
+router.patch("/post/:id/unhide", 
+  auth, 
+  validateObjectId('id'), 
+  postCtrl.unhidePost
+);
+
+// Get hidden posts
+router.get("/hidden-posts", 
+  auth, 
+  validatePagination, 
+  postCtrl.getHiddenPosts
+);
+
+// Unhide all posts
+router.post("/unhide-all-posts", 
+  auth, 
+  postCtrl.unhideAllPosts
+);
+
+// === USER POSTS & DISCOVERY ===
+
+// Get user posts
+router.get("/user_posts/:id", 
+  auth, 
+  validateObjectId('id'), 
+  validatePagination, 
+  generalLimiter, 
+  postCtrl.getUserPosts
+);
+
+// Get discover posts
+router.get("/post_discover", 
+  auth, 
+  generalLimiter, 
+  postCtrl.getPostDiscover
+);
+
+// === SAVED POSTS ===
+
+// Save post
+router.patch("/savePost/:id", 
+  auth, 
+  validateObjectId('id'), 
+  postCtrl.savePost
+);
+
+// Unsave post
+router.patch("/unSavePost/:id", 
+  auth, 
+  validateObjectId('id'), 
+  postCtrl.unSavePost
+);
+
+// Get saved posts
+router.get("/getSavePosts", 
+  auth, 
+  validatePagination, 
+  postCtrl.getSavePost
+);
 
 module.exports = router;

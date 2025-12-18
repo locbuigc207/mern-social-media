@@ -1,99 +1,112 @@
 const Posts = require("../models/postModel");
 const logger = require("./logger");
 
-let io = null;
+class PostScheduler {
+  constructor() {
+    this.intervalId = null;
+    this.io = null;
+  }
 
-const setSocketIO = (socketIO) => {
-  io = socketIO;
-};
-
-const checkScheduledPosts = async () => {
-  try {
-    const now = new Date();
-
-    const scheduledPosts = await Posts.find({
-      status: 'scheduled',
-      scheduledDate: { $lte: now }
-    }).populate('user', 'followers username avatar');
-
-    if (scheduledPosts.length === 0) {
+  start(socketIO) {
+    if (this.intervalId) {
+      logger.warn('Scheduler already running');
       return;
     }
 
-    let successCount = 0;
-    let errorCount = 0;
+    this.io = socketIO;
+    logger.info('📅 Post scheduler started');
 
-    for (const post of scheduledPosts) {
-      try {
-        post.status = 'published';
-        post.isDraft = false;
-        post.publishedAt = now;
-        await post.save();
+    // Run immediately
+    this.checkScheduledPosts();
 
-        successCount++;
+    // Then run every minute
+    this.intervalId = setInterval(() => {
+      this.checkScheduledPosts();
+    }, 60 * 1000);
 
-        if (io && post.user.followers) {
-          io.emit('scheduledPostPublished', {
-            post: {
-              _id: post._id,
-              user: {
-                _id: post.user._id,
-                username: post.user.username,
-                avatar: post.user.avatar,
-                followers: post.user.followers
-              },
-              content: post.content,
-              images: post.images,
-              publishedAt: post.publishedAt
-            }
+    // ✅ Cleanup on process exit
+    process.on('SIGTERM', () => this.stop());
+    process.on('SIGINT', () => this.stop());
+  }
+
+  stop() {
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
+      logger.info('Post scheduler stopped');
+    }
+  }
+
+  async checkScheduledPosts() {
+    try {
+      const now = new Date();
+      const scheduledPosts = await Posts.find({
+        status: 'scheduled',
+        scheduledDate: { $lte: now }
+      }).populate('user', 'followers username avatar');
+
+      if (scheduledPosts.length === 0) {
+        return;
+      }
+
+      let successCount = 0;
+      let errorCount = 0;
+
+      for (const post of scheduledPosts) {
+        try {
+          post.status = 'published';
+          post.isDraft = false;
+          post.publishedAt = now;
+          post.scheduledDate = null; // ✅ Clear scheduled date
+          await post.save();
+
+          successCount++;
+
+          if (this.io && post.user.followers) {
+            this.io.emit('scheduledPostPublished', {
+              post: {
+                _id: post._id,
+                user: {
+                  _id: post.user._id,
+                  username: post.user.username,
+                  avatar: post.user.avatar,
+                  followers: post.user.followers
+                },
+                content: post.content,
+                images: post.images,
+                publishedAt: post.publishedAt
+              }
+            });
+          }
+
+          logger.info('Published scheduled post', {
+            postId: post._id,
+            userId: post.user._id,
+          });
+        } catch (postError) {
+          errorCount++;
+          logger.error('Failed to publish scheduled post', postError, {
+            postId: post._id,
+            userId: post.user._id
           });
         }
-
-        logger.info('Published scheduled post', {
-          postId: post._id,
-          userId: post.user._id,
-          scheduledDate: post.scheduledDate
-        });
-      } catch (postError) {
-        errorCount++;
-        logger.error('Failed to publish scheduled post', postError, {
-          postId: post._id,
-          userId: post.user._id
-        });
       }
-    }
 
-    if (successCount > 0) {
-      logger.info(` Published ${successCount} scheduled post(s)`);
+      if (successCount > 0) {
+        logger.info(`✅ Published ${successCount} scheduled post(s)`);
+      }
+      if (errorCount > 0) {
+        logger.warn(`⚠️ Failed to publish ${errorCount} scheduled post(s)`);
+      }
+    } catch (error) {
+      logger.error('Error in checkScheduledPosts', error);
     }
-    if (errorCount > 0) {
-      logger.warn(`⚠️ Failed to publish ${errorCount} scheduled post(s)`);
-    }
-  } catch (error) {
-    logger.error('Error in checkScheduledPosts', error);
   }
+}
+
+const scheduler = new PostScheduler();
+
+module.exports = {
+  startScheduler: (io) => scheduler.start(io),
+  stopScheduler: () => scheduler.stop()
 };
-
-const startScheduler = (socketIO) => {
-  if (socketIO) {
-    setSocketIO(socketIO);
-  }
-
-  logger.info(' Post scheduler started');
-
-  checkScheduledPosts();
-
-  const schedulerInterval = setInterval(checkScheduledPosts, 60 * 1000);
-
-  process.on('SIGTERM', () => {
-    clearInterval(schedulerInterval);
-    logger.info('Post scheduler stopped');
-  });
-
-  process.on('SIGINT', () => {
-    clearInterval(schedulerInterval);
-    logger.info('Post scheduler stopped');
-  });
-};
-
-module.exports = { startScheduler, checkScheduledPosts, setSocketIO };
