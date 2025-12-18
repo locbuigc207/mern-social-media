@@ -1,12 +1,25 @@
 const Users = require("../models/userModel");
 const Conversations = require("../models/conversationModel");
+const Messages = require("../models/messageModel");
 const { asyncHandler } = require("../middleware/errorHandler");
 const { ValidationError, NotFoundError, ConflictError } = require("../utils/AppError");
 
 const userCtrl = {
+  // ✅ FIXED: Add NoSQL injection protection
   searchUser: asyncHandler(async (req, res) => {
+    // ✅ Sanitize input to prevent NoSQL injection
+    const searchQuery = req.query.username
+      ? req.query.username.replace(/[$.]/g, '').trim()
+      : '';
+    
+    if (!searchQuery) {
+      return res.json({ users: [] });
+    }
+
     const users = await Users.find({
-      username: { $regex: req.query.username, $options: 'i' },
+      username: { $regex: searchQuery, $options: 'i' },
+      role: 'user',
+      isBlocked: false
     })
       .limit(10)
       .select("fullname username avatar");
@@ -125,7 +138,7 @@ const userCtrl = {
     res.json({ privacySettings: user.privacySettings });
   }),
 
-  // ✅ Fixed blockUser logic
+  // ✅ FIXED: Properly update both users when blocking
   blockUser: asyncHandler(async (req, res) => {
     const { id } = req.params;
 
@@ -143,27 +156,40 @@ const userCtrl = {
       throw new ConflictError("User is already blocked.");
     }
 
-    // ✅ Xóa following/followers đúng cách (2 chiều)
+    // ✅ FIXED: Update current user (blocker)
     await Users.findByIdAndUpdate(req.user._id, {
       $addToSet: { blockedUsers: id },
       $pull: { 
-        following: id,
-        followers: id 
+        following: id  // Remove from following
       },
     });
 
+    // ✅ FIXED: Update target user (blocked)
     await Users.findByIdAndUpdate(id, {
-      $addToSet: { blockedByUsers: req.user._id },
+      $addToSet: { blockedBy: req.user._id },
       $pull: { 
-        following: req.user._id,
-        followers: req.user._id 
+        followers: req.user._id,  // Remove blocker from their followers
+        following: req.user._id   // Remove blocker from their following
       },
     });
 
-    // ✅ Xóa conversations
+    // ✅ Delete conversations between blocked users
     await Conversations.deleteMany({
       recipients: { $all: [req.user._id, id] }
     });
+
+    // ✅ Soft delete messages between blocked users
+    await Messages.updateMany(
+      {
+        $or: [
+          { sender: req.user._id, recipient: id },
+          { sender: id, recipient: req.user._id }
+        ]
+      },
+      {
+        $addToSet: { deletedBy: { $each: [req.user._id, id] } }
+      }
+    );
 
     res.json({ msg: "User blocked successfully." });
   }),
@@ -176,7 +202,7 @@ const userCtrl = {
     });
 
     await Users.findByIdAndUpdate(id, {
-      $pull: { blockedByUsers: req.user._id },
+      $pull: { blockedBy: req.user._id },
     });
 
     res.json({ msg: "User unblocked successfully." });
@@ -194,15 +220,24 @@ const userCtrl = {
     const { id } = req.params;
 
     const currentUser = await Users.findById(req.user._id).select(
-      "blockedUsers"
+      "blockedUsers blockedBy"
     );
-    const isBlocked = currentUser.blockedUsers.includes(id);
+    
+    const isBlockedByMe = currentUser.blockedUsers.includes(id);
+    const isBlockedByThem = currentUser.blockedBy.includes(id);
 
-    res.json({ isBlocked });
+    res.json({ 
+      isBlocked: isBlockedByMe,
+      isBlockedBy: isBlockedByThem
+    });
   }),
 
   follow: asyncHandler(async (req, res) => {
     const targetUser = await Users.findById(req.params.id);
+    
+    if (!targetUser) {
+      throw new NotFoundError("User");
+    }
     
     if (targetUser.blockedUsers.includes(req.user._id)) {
       return res.status(403).json({ msg: "You cannot follow this user." });
@@ -256,14 +291,14 @@ const userCtrl = {
 
   suggestionsUser: asyncHandler(async (req, res) => {
     const currentUser = await Users.findById(req.user._id)
-      .select("following blockedUsers blockedByUsers")
+      .select("following blockedUsers blockedBy")
       .lean();
 
     const newArr = [
       ...currentUser.following,
       req.user._id,
       ...currentUser.blockedUsers,
-      ...currentUser.blockedByUsers,
+      ...currentUser.blockedBy,
     ];
 
     const num = parseInt(req.query.num) || 10;
@@ -298,6 +333,7 @@ const userCtrl = {
           password: 0,
           resetPasswordToken: 0,
           verificationToken: 0,
+          previousResetTokens: 0,
         },
       },
     ]);

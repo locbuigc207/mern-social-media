@@ -16,15 +16,12 @@ class PostScheduler {
     this.io = socketIO;
     logger.info('📅 Post scheduler started');
 
-    // Run immediately
     this.checkScheduledPosts();
 
-    // Then run every minute
     this.intervalId = setInterval(() => {
       this.checkScheduledPosts();
     }, 60 * 1000);
 
-    // ✅ Cleanup on process exit
     process.on('SIGTERM', () => this.stop());
     process.on('SIGINT', () => this.stop());
   }
@@ -57,7 +54,7 @@ class PostScheduler {
           post.status = 'published';
           post.isDraft = false;
           post.publishedAt = now;
-          post.scheduledDate = null; // ✅ Clear scheduled date
+          post.scheduledDate = null;
           await post.save();
 
           successCount++;
@@ -107,6 +104,6 @@ class PostScheduler {
 const scheduler = new PostScheduler();
 
 module.exports = {
-  startScheduler: (io) => scheduler.start(io),
+  startPostScheduler: (io) => scheduler.start(io),
   stopScheduler: () => scheduler.stop()
 };

@@ -145,14 +145,13 @@ const authCtrl = {
     res.json({ msg: "Verification email sent successfully!" });
   }),
 
-  // ✅ Improved forgotPassword
+  // ✅ FIXED: Improved forgotPassword with token invalidation
   forgotPassword: asyncHandler(async (req, res) => {
     const { email } = req.body;
 
     const user = await Users.findOne({ email });
 
     if (!user) {
-      // ✅ Không tiết lộ user có tồn tại hay không
       return res.json({
         msg: "If this email exists, you will receive a password reset link.",
       });
@@ -166,7 +165,21 @@ const authCtrl = {
       });
     }
 
-    // ✅ Invalidate old token bằng cách tạo token mới
+    // ✅ NEW: Store old token in history before invalidating
+    if (user.resetPasswordToken) {
+      user.previousResetTokens = user.previousResetTokens || [];
+      user.previousResetTokens.push({
+        token: user.resetPasswordToken,
+        invalidatedAt: new Date()
+      });
+      
+      // Keep only last 5 invalidated tokens
+      if (user.previousResetTokens.length > 5) {
+        user.previousResetTokens = user.previousResetTokens.slice(-5);
+      }
+    }
+
+    // ✅ Generate NEW token (this invalidates old one)
     const resetToken = crypto.randomBytes(32).toString("hex");
     const resetPasswordToken = crypto
       .createHash("sha256")
@@ -177,7 +190,7 @@ const authCtrl = {
     user.resetPasswordExpires = Date.now() + 60 * 60 * 1000;
     user.resetAttempts = (user.resetAttempts || 0) + 1;
     
-    // ✅ Lock account sau 5 lần thử
+    // ✅ Lock account after 5 attempts
     if (user.resetAttempts > 5) {
       user.isBlocked = true;
       user.blockedReason = "Too many password reset attempts";
@@ -200,6 +213,7 @@ const authCtrl = {
     });
   }),
 
+  // ✅ FIXED: Check for invalidated tokens
   resetPassword: asyncHandler(async (req, res) => {
     const { token } = req.params;
     const { password, confirmPassword } = req.body;
@@ -233,12 +247,24 @@ const authCtrl = {
       throw new ValidationError("Password reset token is invalid or has expired.");
     }
 
+    // ✅ NEW: Check if token was invalidated
+    if (user.previousResetTokens && user.previousResetTokens.length > 0) {
+      const isInvalidated = user.previousResetTokens.some(
+        old => old.token === resetPasswordToken
+      );
+      
+      if (isInvalidated) {
+        throw new ValidationError("This reset link has been invalidated. Please request a new one.");
+      }
+    }
+
     const passwordHash = await bcrypt.hash(password, 12);
 
     user.password = passwordHash;
     user.resetPasswordToken = undefined;
     user.resetPasswordExpires = undefined;
-    user.resetAttempts = 0; // ✅ Reset attempts counter
+    user.resetAttempts = 0;
+    user.previousResetTokens = []; // ✅ Clear history
     await user.save();
 
     res.json({ msg: "Password reset successful! You can now login." });
@@ -424,6 +450,7 @@ const authCtrl = {
     return res.json({ msg: "Logged out Successfully." });
   }),
 
+  // ✅ FIXED: Convert callback to async/await
   generateAccessToken: asyncHandler(async (req, res) => {
     const rf_token = req.cookies.refreshtoken;
 
@@ -431,33 +458,36 @@ const authCtrl = {
       throw new AuthenticationError("Please login again.");
     }
     
-    jwt.verify(
-      rf_token,
-      process.env.REFRESH_TOKEN_SECRET,
-      async (err, result) => {
-        if (err) {
-          throw new AuthenticationError("Please login again.");
-        }
+    try {
+      // ✅ Convert to promise-based
+      const result = await new Promise((resolve, reject) => {
+        jwt.verify(rf_token, process.env.REFRESH_TOKEN_SECRET, (err, decoded) => {
+          if (err) reject(err);
+          else resolve(decoded);
+        });
+      });
 
-        const user = await Users.findById(result.id)
-          .select("-password")
-          .populate("followers following", "-password");
+      const user = await Users.findById(result.id)
+        .select("-password")
+        .populate("followers following", "-password");
 
-        if (!user) {
-          throw new ValidationError("User does not exist.");
-        }
-
-        if (user.isBlocked && user.role !== 'admin') {
-          return res.status(403).json({ 
-            msg: "Your account has been blocked.",
-            isBlocked: true 
-          });
-        }
-
-        const access_token = createAccessToken({ id: result.id });
-        res.json({ access_token, user });
+      if (!user) {
+        throw new ValidationError("User does not exist.");
       }
-    );
+
+      if (user.isBlocked && user.role !== 'admin') {
+        return res.status(403).json({ 
+          msg: "Your account has been blocked.",
+          isBlocked: true 
+        });
+      }
+
+      const access_token = createAccessToken({ id: result.id });
+      res.json({ access_token, user });
+      
+    } catch (err) {
+      throw new AuthenticationError("Please login again.");
+    }
   }),
 };
 

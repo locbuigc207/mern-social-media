@@ -12,36 +12,32 @@ const extractHashtags = (text) => {
   return [...new Set(matches.map(tag => tag.slice(1).toLowerCase()))];
 };
 
+// ✅ FIXED: Use bulkWrite to reduce database queries
 const processHashtags = async (postId, content) => {
   try {
     const hashtags = extractHashtags(content);
     
     if (hashtags.length === 0) return [];
 
-    const processedTags = [];
-
-    for (const tagName of hashtags) {
-      let hashtag = await Hashtags.findOne({ name: tagName });
-      
-      if (hashtag) {
-        if (!hashtag.posts.includes(postId)) {
-          hashtag.posts.push(postId);
-          hashtag.usageCount += 1;
-          hashtag.lastUsed = new Date();
-          await hashtag.save();
-        }
-      } else {
-        hashtag = new Hashtags({
-          name: tagName,
-          posts: [postId],
-          usageCount: 1,
-          lastUsed: new Date()
-        });
-        await hashtag.save();
+    // ✅ Use bulkWrite for efficiency (1 query instead of 2N queries)
+    const operations = hashtags.map(tagName => ({
+      updateOne: {
+        filter: { name: tagName },
+        update: {
+          $addToSet: { posts: postId },
+          $inc: { usageCount: 1 },
+          $set: { lastUsed: new Date() }
+        },
+        upsert: true
       }
+    }));
 
-      processedTags.push(hashtag);
-    }
+    await Hashtags.bulkWrite(operations);
+
+    // ✅ Fetch updated hashtags in single query
+    const processedTags = await Hashtags.find({ 
+      name: { $in: hashtags } 
+    });
 
     return processedTags;
   } catch (error) {
@@ -50,26 +46,28 @@ const processHashtags = async (postId, content) => {
   }
 };
 
+// ✅ FIXED: Use bulkWrite for removal
 const removePostFromHashtags = async (postId, content) => {
   try {
     const hashtags = extractHashtags(content);
     
-    for (const tagName of hashtags) {
-      const hashtag = await Hashtags.findOne({ name: tagName });
-      
-      if (hashtag) {
-        hashtag.posts = hashtag.posts.filter(
-          id => id.toString() !== postId.toString()
-        );
-        hashtag.usageCount = Math.max(0, hashtag.usageCount - 1);
-        
-        if (hashtag.posts.length === 0) {
-          await Hashtags.findByIdAndDelete(hashtag._id);
-        } else {
-          await hashtag.save();
-        }
+    if (hashtags.length === 0) return;
+
+    // ✅ First, update all hashtags
+    await Hashtags.updateMany(
+      { name: { $in: hashtags } },
+      {
+        $pull: { posts: postId },
+        $inc: { usageCount: -1 }
       }
-    }
+    );
+
+    // ✅ Then delete hashtags with no posts
+    await Hashtags.deleteMany({
+      name: { $in: hashtags },
+      posts: { $size: 0 }
+    });
+    
   } catch (error) {
     console.error('Error removing post from hashtags:', error);
   }
@@ -133,8 +131,11 @@ const getTrendingHashtags = async (limit = 20) => {
 
 const searchHashtags = async (query, limit = 10) => {
   try {
+    // ✅ Sanitize query
+    const sanitizedQuery = query.replace(/[$.]/g, '').trim();
+    
     const hashtags = await Hashtags.find({
-      name: { $regex: query, $options: 'i' }
+      name: { $regex: sanitizedQuery, $options: 'i' }
     })
       .sort('-usageCount')
       .limit(limit)

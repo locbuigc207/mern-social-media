@@ -17,18 +17,15 @@ const messageCtrl = {
       throw new ValidationError("Message cannot be empty.");
     }
 
-    // Check if recipient exists
     const recipientUser = await Users.findById(recipient);
     if (!recipientUser) {
       throw new NotFoundError("Recipient user");
     }
 
-    // Check if sender is blocked
     if (recipientUser.blockedUsers.includes(req.user._id)) {
       throw new AuthorizationError("You cannot send messages to this user.");
     }
 
-    // Check if recipient is blocked by sender
     const currentUser = await Users.findById(req.user._id);
     if (currentUser.blockedUsers.includes(recipient)) {
       throw new AuthorizationError("You have blocked this user.");
@@ -93,7 +90,6 @@ const messageCtrl = {
         }
       });
 
-    // Filter out blocked conversations
     const currentUser = await Users.findById(req.user._id);
     const filteredConversations = conversations.filter(conv => {
       const otherUser = conv.recipients.find(
@@ -118,7 +114,8 @@ const messageCtrl = {
           { sender: req.user._id, recipient: req.params.id },
           { sender: req.params.id, recipient: req.user._id },
         ],
-        deletedFor: { $ne: req.user._id }
+        // ✅ FIXED: Use correct field name
+        deletedBy: { $ne: req.user._id }
       }),
       req.query
     ).paginating();
@@ -133,6 +130,7 @@ const messageCtrl = {
     });
   }),
 
+  // ✅ FIXED: Correct field name and logic
   deleteMessage: asyncHandler(async (req, res) => {
     const message = await Messages.findById(req.params.messageId);
 
@@ -140,17 +138,32 @@ const messageCtrl = {
       throw new NotFoundError("Message");
     }
 
-    if (message.sender.toString() !== req.user._id.toString()) {
-      throw new AuthorizationError("You can only delete your own messages.");
+    // ✅ Check if user is part of conversation
+    if (
+      message.sender.toString() !== req.user._id.toString() &&
+      message.recipient.toString() !== req.user._id.toString()
+    ) {
+      throw new AuthorizationError("You can only delete messages in your conversations.");
     }
 
-    // Soft delete: add user to deletedFor array
-    if (!message.deletedFor.includes(req.user._id)) {
-      message.deletedFor.push(req.user._id);
+    // ✅ FIXED: Use correct field name 'deletedBy'
+    if (!message.deletedBy.includes(req.user._id)) {
+      message.deletedBy.push(req.user._id);
     }
 
-    // If both users deleted, permanently delete
-    if (message.deletedFor.length >= 2) {
+    // ✅ If both users deleted, permanently delete
+    const bothParticipants = [
+      message.sender.toString(), 
+      message.recipient.toString()
+    ];
+    
+    const allDeleted = bothParticipants.every(userId => 
+      message.deletedBy.some(deletedUserId => 
+        deletedUserId.toString() === userId
+      )
+    );
+
+    if (allDeleted) {
       await Messages.findByIdAndDelete(req.params.messageId);
       
       logger.info('Message permanently deleted', {
@@ -176,6 +189,7 @@ const messageCtrl = {
     });
   }),
 
+  // ✅ FIXED: Correct field name
   deleteConversation: asyncHandler(async (req, res) => {
     const conversation = await Conversations.findOne({
       recipients: { $all: [req.user._id, req.params.userId] }
@@ -185,25 +199,24 @@ const messageCtrl = {
       throw new NotFoundError("Conversation");
     }
 
-    // Soft delete all messages in this conversation for current user
+    // ✅ FIXED: Use correct field name
     await Messages.updateMany(
       {
         conversation: conversation._id,
-        deletedFor: { $ne: req.user._id }
+        deletedBy: { $ne: req.user._id }
       },
       {
-        $addToSet: { deletedFor: req.user._id }
+        $addToSet: { deletedBy: req.user._id }
       }
     );
 
-    // Check if all messages are deleted by both users
+    // ✅ Check if all messages are deleted by both users
     const allMessagesDeleted = await Messages.countDocuments({
       conversation: conversation._id,
-      $expr: { $lt: [{ $size: "$deletedFor" }, 2] }
+      $expr: { $lt: [{ $size: "$deletedBy" }, 2] }
     });
 
     if (allMessagesDeleted === 0) {
-      // Permanently delete conversation and all messages
       await Messages.deleteMany({ conversation: conversation._id });
       await Conversations.findByIdAndDelete(conversation._id);
       
@@ -273,7 +286,8 @@ const messageCtrl = {
         sender: userId,
         recipient: req.user._id,
         isRead: false,
-        deletedFor: { $ne: req.user._id }
+        // ✅ FIXED: Use correct field name
+        deletedBy: { $ne: req.user._id }
       },
       {
         $set: {
@@ -299,7 +313,8 @@ const messageCtrl = {
     const count = await Messages.countDocuments({
       recipient: req.user._id,
       isRead: false,
-      deletedFor: { $ne: req.user._id }
+      // ✅ FIXED: Use correct field name
+      deletedBy: { $ne: req.user._id }
     });
 
     res.json({ 
@@ -314,7 +329,8 @@ const messageCtrl = {
       sender: userId,
       recipient: req.user._id,
       isRead: false,
-      deletedFor: { $ne: req.user._id }
+      // ✅ FIXED: Use correct field name
+      deletedBy: { $ne: req.user._id }
     });
 
     res.json({ 
@@ -333,13 +349,17 @@ const messageCtrl = {
       throw new ValidationError("Search query must be at least 2 characters.");
     }
 
+    // ✅ Sanitize query
+    const sanitizedQuery = query.trim().replace(/[$.]/g, '');
+
     const searchQuery = {
       $or: [
         { sender: req.user._id },
         { recipient: req.user._id }
       ],
-      text: { $regex: query.trim(), $options: 'i' },
-      deletedFor: { $ne: req.user._id }
+      text: { $regex: sanitizedQuery, $options: 'i' },
+      // ✅ FIXED: Use correct field name
+      deletedBy: { $ne: req.user._id }
     };
 
     if (conversationWith) {
@@ -358,7 +378,7 @@ const messageCtrl = {
     const total = await Messages.countDocuments(searchQuery);
 
     logger.info('Messages searched', {
-      query,
+      query: sanitizedQuery,
       userId: req.user._id,
       results: messages.length
     });
@@ -385,7 +405,6 @@ const messageCtrl = {
       throw new NotFoundError("Message");
     }
 
-    // Check if user is part of conversation
     if (
       message.sender.toString() !== req.user._id.toString() &&
       message.recipient.toString() !== req.user._id.toString()
@@ -398,10 +417,8 @@ const messageCtrl = {
     );
 
     if (existingReactionIndex !== -1) {
-      // Update existing reaction
       message.reactions[existingReactionIndex].emoji = emoji;
     } else {
-      // Add new reaction
       message.reactions.push({
         user: req.user._id,
         emoji
@@ -449,7 +466,6 @@ const messageCtrl = {
   })
 };
 
-// Helper class for pagination (if not already defined elsewhere)
 class APIfeatures {
   constructor(query, queryString) {
     this.query = query;

@@ -4,82 +4,78 @@ const userCtrl = require('../controllers/userCtrl');
 const { validate } = require('../middleware/validate');
 const userSchemas = require('../schemas/userSchema');
 const validateObjectId = require('../middleware/validateObjectId');
+// ✅ FIXED: Import follow limiter
+const { followLimiter, searchLimiter } = require('../middleware/rateLimiter');
 
-// Search user
+// ✅ FIXED: Add rate limiter for search
 router.get('/search', 
-  auth, 
+  auth,
+  searchLimiter,  // ✅ NEW
   userCtrl.searchUser
 );
 
-// Get user by ID
 router.get('/user/:id', 
   auth, 
   validateObjectId('id'), 
   userCtrl.getUser
 );
 
-// Update profile
 router.patch("/user", 
   auth, 
   validate(userSchemas.updateProfile), 
   userCtrl.updateUser
 );
 
-// Get privacy settings
 router.get("/privacy-settings", 
   auth, 
   userCtrl.getPrivacySettings
 );
 
-// Update privacy settings
 router.patch("/privacy-settings", 
   auth, 
   validate(userSchemas.updatePrivacy), 
   userCtrl.updatePrivacySettings
 );
 
-// Block user
 router.post("/user/:id/block", 
   auth, 
   validateObjectId('id'), 
   userCtrl.blockUser
 );
 
-// Unblock user
 router.delete("/user/:id/unblock", 
   auth, 
   validateObjectId('id'), 
   userCtrl.unblockUser
 );
 
-// Get blocked users
 router.get("/blocked-users", 
   auth, 
   userCtrl.getBlockedUsers
 );
 
-// Check if user is blocked
 router.get("/user/:id/check-blocked", 
   auth, 
   validateObjectId('id'), 
   userCtrl.checkBlocked
 );
 
-// Follow user
+// ✅ FIXED: Add rate limiter for follow
 router.patch("/user/:id/follow", 
   auth, 
-  validateObjectId('id'), 
+  validateObjectId('id'),
+  followLimiter,  // ✅ NEW - Prevent automated following
   userCtrl.follow
 );
 
-// Unfollow user
+// ✅ FIXED: Add rate limiter for unfollow
 router.patch("/user/:id/unfollow", 
   auth, 
-  validateObjectId('id'), 
+  validateObjectId('id'),
+  followLimiter,  // ✅ NEW
   userCtrl.unfollow
 );
 
-// Get suggestions
 router.get("/suggestionsUser", 
   auth, 
   userCtrl.suggestionsUser

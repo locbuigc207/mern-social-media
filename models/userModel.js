@@ -105,12 +105,18 @@ const userSchema = new mongoose.Schema(
     blockedAt: Date,
     resetPasswordToken: String,
     resetPasswordExpires: Date,
-    // ✅ NEW FIELD - Track password reset attempts
     resetAttempts: {
       type: Number,
       default: 0,
     },
     lastResetAttempt: Date,
+    // ✅ NEW FIELD: Store invalidated reset tokens
+    previousResetTokens: [
+      {
+        token: String,
+        invalidatedAt: Date
+      }
+    ],
     privacySettings: {
       profileVisibility: {
         type: String,
@@ -163,29 +169,27 @@ userSchema.index({ role: 1, isBlocked: 1 });
 userSchema.index({ followers: 1 });
 userSchema.index({ following: 1 });
 userSchema.index({ createdAt: -1 });
+// ✅ NEW: Index for blocked users queries
+userSchema.index({ blockedUsers: 1 });
+userSchema.index({ blockedBy: 1 });
 
-// Instance method to check if user can reset password
 userSchema.methods.canResetPassword = function() {
   if (this.resetAttempts >= 5) {
-    // Check if 60 minutes have passed since last attempt
     const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
     if (this.lastResetAttempt && this.lastResetAttempt > oneHourAgo) {
       return false;
     }
-    // Reset attempts after cooldown period
     this.resetAttempts = 0;
   }
   return true;
 };
 
-// Instance method to increment reset attempts
 userSchema.methods.incrementResetAttempts = async function() {
   this.resetAttempts += 1;
   this.lastResetAttempt = new Date();
   await this.save();
 };
 
-// Instance method to reset attempts counter
 userSchema.methods.resetPasswordAttempts = async function() {
   this.resetAttempts = 0;
   this.lastResetAttempt = undefined;

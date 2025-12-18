@@ -5,28 +5,67 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const path = require("path");
 const { createServer } = require("http");
+const helmet = require("helmet");
 const SocketServer = require("./socketServer");
 const logger = require("./utils/logger");
 
-// ✅ Import shutdown manager and schedulers
 const shutdownManager = require("./utils/shutdown");
 const { startPostScheduler, stopScheduler: stopPostScheduler } = require("./utils/postScheduler");
 const { startCleanupSchedulers, stopCleanupSchedulers } = require("./utils/cleanupScheduler");
 const { closeRateLimiter } = require("./middleware/rateLimiter");
 
-// ✅ Import centralized error handler
 const { errorHandler } = require("./middleware/errorHandler");
 
 const app = express();
 
+// ✅ FIXED: Add security headers
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "https://res.cloudinary.com"],
+      connectSrc: ["'self'"],
+    },
+  },
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true
+  }
+}));
+
+// ✅ FIXED: Add input sanitization
+const mongoSanitize = require('express-mongo-sanitize');
+const xss = require('xss-clean');
+
 // Middleware
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+
+// ✅ Apply sanitization
+app.use(mongoSanitize({
+  replaceWith: '_'
+}));
+app.use(xss());
+
 app.use(cors({
   origin: process.env.CLIENT_URL || "http://localhost:3000",
   credentials: true
 }));
 app.use(cookieParser());
+
+// ✅ HTTPS redirect in production
+if (process.env.NODE_ENV === 'production') {
+  app.use((req, res, next) => {
+    if (req.header('x-forwarded-proto') !== 'https') {
+      res.redirect(`https://${req.header('host')}${req.url}`);
+    } else {
+      next();
+    }
+  });
+}
 
 // Static files
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
@@ -62,16 +101,35 @@ app.use((req, res) => {
   });
 });
 
-// ✅ Use centralized error handler
 app.use(errorHandler);
 
-// Database Connection
+// ✅ FIXED: Add connection pooling and better configuration
 const connectDB = async () => {
   try {
+    // ✅ Validate environment variables
+    if (!process.env.MONGODB_URL) {
+      throw new Error('MONGODB_URL is not defined in environment variables');
+    }
+
+    if (!process.env.ACCESS_TOKEN_SECRET || process.env.ACCESS_TOKEN_SECRET === 'your_access_token_secret_here_change_this') {
+      throw new Error('ACCESS_TOKEN_SECRET must be changed from default value');
+    }
+
+    if (!process.env.REFRESH_TOKEN_SECRET || process.env.REFRESH_TOKEN_SECRET === 'your_refresh_token_secret_here_change_this') {
+      throw new Error('REFRESH_TOKEN_SECRET must be changed from default value');
+    }
+
     await mongoose.connect(process.env.MONGODB_URL, {
       useNewUrlParser: true,
       useUnifiedTopology: true,
+      // ✅ FIXED: Add connection pooling
+      maxPoolSize: 50,
+      minPoolSize: 10,
+      socketTimeoutMS: 45000,
+      serverSelectionTimeoutMS: 5000,
+      family: 4
     });
+    
     logger.info("MongoDB Connected Successfully");
   } catch (error) {
     logger.error("MongoDB Connection Error:", error);
@@ -79,7 +137,6 @@ const connectDB = async () => {
   }
 };
 
-// Mongoose connection events
 mongoose.connection.on("connected", () => {
   logger.info("Mongoose connected to DB");
 });
@@ -92,27 +149,21 @@ mongoose.connection.on("disconnected", () => {
   logger.warn("Mongoose disconnected from DB");
 });
 
-// Create HTTP server
 const httpServer = createServer(app);
 
-// Initialize Socket.IO
 SocketServer(httpServer);
 
-// Start Server
 const PORT = process.env.PORT || 5000;
 
 const startServer = async () => {
   try {
-    // Connect to database
     await connectDB();
 
-    // Start HTTP server
     const server = httpServer.listen(PORT, () => {
       logger.info(`Server is running on port ${PORT}`);
       logger.info(`Environment: ${process.env.NODE_ENV}`);
     });
 
-    // ✅ Register resources for graceful shutdown
     shutdownManager.register('http', async () => {
       return new Promise((resolve) => {
         server.close(() => {
@@ -142,7 +193,6 @@ const startServer = async () => {
       logger.info('Cleanup schedulers stopped');
     });
 
-    // Start schedulers
     await startPostScheduler();
     startCleanupSchedulers();
 
@@ -153,7 +203,6 @@ const startServer = async () => {
   }
 };
 
-// ✅ Graceful shutdown handlers
 const shutdown = async (signal) => {
   logger.info(`${signal} received. Starting graceful shutdown...`);
   
@@ -167,34 +216,27 @@ const shutdown = async (signal) => {
   }
 };
 
-// Handle shutdown signals
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
-// Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
   logger.error('Uncaught Exception:', error);
   shutdown('uncaughtException');
 });
 
-// Handle unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
   logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
   shutdown('unhandledRejection');
 });
 
-// ✅ Force exit after timeout
-const SHUTDOWN_TIMEOUT = 15000; // 15 seconds
+const SHUTDOWN_TIMEOUT = 15000;
 const forceShutdownTimer = setTimeout(() => {
   logger.error('Forced shutdown after timeout');
   process.exit(1);
 }, SHUTDOWN_TIMEOUT);
 
-// Don't keep the process running if this is the only timer
 forceShutdownTimer.unref();
 
-// Start the application
 startServer();
 
-// Export for testing
 module.exports = app;

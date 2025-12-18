@@ -129,38 +129,46 @@ const storyCtrl = {
     });
   }),
 
-  // ✅ Fixed viewStory logic
+  // ✅ FIXED: Use atomic MongoDB operation to prevent race condition
   viewStory: asyncHandler(async (req, res) => {
     const { storyId } = req.params;
 
-    // ✅ Check story tồn tại trước
-    const existingStory = await Stories.findById(storyId);
-    if (!existingStory) {
-      throw new NotFoundError('Story');
-    }
-
-    // ✅ Check đã view chưa
-    const alreadyViewed = existingStory.views.some(
-      view => view.user.toString() === req.user._id.toString()
+    // ✅ Atomic operation: Only update if user hasn't viewed yet
+    const story = await Stories.findOneAndUpdate(
+      {
+        _id: storyId,
+        'views.user': { $ne: req.user._id }  // Only if not already viewed
+      },
+      {
+        $push: {
+          views: { 
+            user: req.user._id, 
+            viewedAt: new Date() 
+          }
+        }
+      },
+      { new: true }
     );
 
-    if (alreadyViewed) {
+    if (!story) {
+      // Either story doesn't exist OR already viewed
+      const existingStory = await Stories.findById(storyId);
+      
+      if (!existingStory) {
+        throw new NotFoundError('Story');
+      }
+
+      // Story exists but already viewed
       return res.json({
         msg: "Story already viewed",
         viewsCount: existingStory.views.length,
       });
     }
 
-    // ✅ Thêm view mới
-    existingStory.views.push({
-      user: req.user._id,
-      viewedAt: new Date()
-    });
-    await existingStory.save();
-
+    // Successfully added view
     res.json({
       msg: "Story viewed",
-      viewsCount: existingStory.views.length,
+      viewsCount: story.views.length,
     });
   }),
 
