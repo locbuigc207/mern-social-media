@@ -35,9 +35,51 @@ const blockUserSchema = {
     maxLength: 500
   }
 };
-router.post("/user/:id/block", auth, checkAdmin, validateObjectId('id'),validateBody(blockUserSchema),adminCtrl.blockUserAccount);
-router.post("/user/:id/unblock", auth, checkAdmin, validateObjectId('id'),adminCtrl.unblockUserAccount);
+
+router.post("/user/:id/block", auth, checkAdmin, validateObjectId('id'), validateBody(blockUserSchema), adminCtrl.blockUserAccount);
+router.post("/user/:id/unblock", auth, checkAdmin, validateObjectId('id'), adminCtrl.unblockUserAccount);
 router.get("/analytics", auth, checkAdmin, adminCtrl.getSiteAnalytics);
 router.get("/recent_activities", auth, checkAdmin, adminCtrl.getRecentActivities);
+
+router.get("/reports", auth, checkAdmin, validatePagination, adminCtrl.getAllReports);
+router.get("/reports/users", auth, checkAdmin, validatePagination, adminCtrl.getReportedUsers);
+router.get("/report/:reportId", auth, checkAdmin, validateObjectId('reportId'), adminCtrl.getReportDetails);
+
+const acceptReportSchema = {
+  actionTaken: {
+    type: 'string',
+    required: true,
+    custom: (value) => {
+      const valid = ['none', 'warning', 'content_removed', 'account_suspended', 'account_banned'];
+      if (!valid.includes(value)) return 'Invalid action';
+    }
+  },
+  adminNote: {
+    type: 'string',
+    required: false,
+    maxLength: 1000
+  },
+  blockUser: {
+    type: 'boolean',
+    required: false
+  },
+  removeContent: {
+    type: 'boolean',
+    required: false
+  }
+};
+
+const declineReportSchema = {
+  adminNote: {
+    type: 'string',
+    required: true,
+    minLength: 10,
+    maxLength: 1000
+  }
+};
+
+router.post("/report/:reportId/accept", auth, checkAdmin, validateObjectId('reportId'), validateBody(acceptReportSchema), adminCtrl.acceptReport);
+router.post("/report/:reportId/decline", auth, checkAdmin, validateObjectId('reportId'), validateBody(declineReportSchema), adminCtrl.declineReport);
+router.patch("/report/:reportId/reviewing", auth, checkAdmin, validateObjectId('reportId'), adminCtrl.markReportAsReviewing);
 
 module.exports = router;

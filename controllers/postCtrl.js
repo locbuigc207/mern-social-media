@@ -1,6 +1,7 @@
 const Posts = require("../models/postModel");
 const Comments = require("../models/commentModel");
 const Users = require("../models/userModel");
+const Reports = require("../models/reportModel");
 const { uploadMultipleToCloudinary } = require("../services/cloudinaryService");
 const logger = require("../utils/logger");
 
@@ -26,83 +27,83 @@ const postCtrl = {
 
       let images = [];
       if (req.files && req.files.length > 0) {
-        logger.info('Uploading files to Cloudinary', {
+        logger.info("Uploading files to Cloudinary", {
           userId: req.user._id,
-          fileCount: req.files.length
+          fileCount: req.files.length,
         });
 
-        const filePaths = req.files.map(file => file.path);
+        const filePaths = req.files.map((file) => file.path);
         const uploadResult = await uploadMultipleToCloudinary(filePaths, {
-          folder: 'campus-connect/posts',
-          resourceType: 'auto'
+          folder: "campus-connect/posts",
+          resourceType: "auto",
         });
 
         if (!uploadResult.success) {
-          logger.error('Cloudinary upload failed', null, {
+          logger.error("Cloudinary upload failed", null, {
             userId: req.user._id,
-            errors: uploadResult.errors
+            errors: uploadResult.errors,
           });
           return res.status(500).json({
-            msg: 'Failed to upload some images.',
-            errors: uploadResult.errors
+            msg: "Failed to upload some images.",
+            errors: uploadResult.errors,
           });
         }
 
-        images = uploadResult.results.map(result => ({
+        images = uploadResult.results.map((result) => ({
           url: result.url,
           publicId: result.publicId,
           type: result.type,
           width: result.width,
-          height: result.height
+          height: result.height,
         }));
 
-        logger.info('Files uploaded successfully', {
+        logger.info("Files uploaded successfully", {
           userId: req.user._id,
-          uploadedCount: images.length
+          uploadedCount: images.length,
         });
       }
 
       if (!isDraft && images.length === 0) {
         return res.status(400).json({
-          msg: "Please add at least one photo or video."
+          msg: "Please add at least one photo or video.",
         });
       }
 
-      if (status === 'scheduled') {
+      if (status === "scheduled") {
         if (!scheduledDate) {
           return res.status(400).json({
-            msg: "Please provide scheduled date."
+            msg: "Please provide scheduled date.",
           });
         }
 
         const scheduleDate = new Date(scheduledDate);
         if (scheduleDate <= new Date()) {
           return res.status(400).json({
-            msg: "Scheduled date must be in the future."
+            msg: "Scheduled date must be in the future.",
           });
         }
       }
 
       const newPost = new Posts({
-        content: content || '',
+        content: content || "",
         images,
         user: req.user._id,
-        status: status || 'published',
+        status: status || "published",
         isDraft: isDraft || false,
         scheduledDate: scheduledDate ? new Date(scheduledDate) : null,
-        publishedAt: status === 'published' ? new Date() : null
+        publishedAt: status === "published" ? new Date() : null,
       });
 
       await newPost.save();
 
-      logger.audit('Post created', req.user._id, {
+      logger.audit("Post created", req.user._id, {
         postId: newPost._id,
         status: newPost.status,
-        imagesCount: images.length
+        imagesCount: images.length,
       });
 
       let message = "Post created successfully.";
-      if (status === 'scheduled') {
+      if (status === "scheduled") {
         message = "Post scheduled successfully.";
       } else if (isDraft) {
         message = "Draft saved successfully.";
@@ -116,8 +117,8 @@ const postCtrl = {
         },
       });
     } catch (err) {
-      logger.error('Create post failed', err, {
-        userId: req.user._id
+      logger.error("Create post failed", err, {
+        userId: req.user._id,
       });
       return res.status(500).json({ msg: err.message });
     }
@@ -128,8 +129,11 @@ const postCtrl = {
       const features = new APIfeatures(
         Posts.find({
           user: [...req.user.following, req.user._id],
-          status: 'published',
-          isDraft: false
+          status: "published",
+          isDraft: false,
+          isHidden: false, 
+          hiddenBy: { $ne: req.user._id }, 
+          moderationStatus: { $ne: "removed" }, 
         }),
         req.query
       ).paginating();
@@ -153,9 +157,7 @@ const postCtrl = {
         posts,
       });
     } catch (err) {
-      if (logger) {
-        logger.error('Get posts failed', err, { userId: req.user._id });
-      }
+      logger.error("Get posts failed", err, { userId: req.user._id });
       return res.status(500).json({ msg: err.message });
     }
   },
@@ -166,7 +168,7 @@ const postCtrl = {
         Posts.find({
           user: req.user._id,
           isDraft: true,
-          status: 'draft'
+          status: "draft",
         }),
         req.query
       ).paginating();
@@ -181,8 +183,7 @@ const postCtrl = {
         drafts,
       });
     } catch (err) {
-      const logger = require('../utils/logger');
-      logger.error('Get draft posts failed', err, { userId: req.user._id });
+      logger.error("Get draft posts failed", err, { userId: req.user._id });
       return res.status(500).json({ msg: err.message });
     }
   },
@@ -192,7 +193,7 @@ const postCtrl = {
       const features = new APIfeatures(
         Posts.find({
           user: req.user._id,
-          status: 'scheduled'
+          status: "scheduled",
         }),
         req.query
       ).paginating();
@@ -219,8 +220,8 @@ const postCtrl = {
         content,
         images: images || [],
         user: req.user._id,
-        status: 'draft',
-        isDraft: true
+        status: "draft",
+        isDraft: true,
       });
 
       await newDraft.save();
@@ -244,7 +245,7 @@ const postCtrl = {
       const post = await Posts.findOne({
         _id: id,
         user: req.user._id,
-        isDraft: true
+        isDraft: true,
       });
 
       if (!post) {
@@ -252,10 +253,12 @@ const postCtrl = {
       }
 
       if (post.images.length === 0) {
-        return res.status(400).json({ msg: "Please add at least one image before publishing." });
+        return res
+          .status(400)
+          .json({ msg: "Please add at least one image before publishing." });
       }
 
-      post.status = 'published';
+      post.status = "published";
       post.isDraft = false;
       post.publishedAt = new Date();
       await post.save();
@@ -287,7 +290,7 @@ const postCtrl = {
       const draft = await Posts.findOne({
         _id: id,
         user: req.user._id,
-        isDraft: true
+        isDraft: true,
       });
 
       if (!draft) {
@@ -314,7 +317,7 @@ const postCtrl = {
       const draft = await Posts.findOneAndDelete({
         _id: id,
         user: req.user._id,
-        isDraft: true
+        isDraft: true,
       });
 
       if (!draft) {
@@ -341,16 +344,18 @@ const postCtrl = {
 
       const scheduleDate = new Date(scheduledDate);
       if (scheduleDate <= new Date()) {
-        return res.status(400).json({ msg: "Scheduled date must be in the future." });
+        return res
+          .status(400)
+          .json({ msg: "Scheduled date must be in the future." });
       }
 
       const newPost = new Posts({
         content,
         images,
         user: req.user._id,
-        status: 'scheduled',
+        status: "scheduled",
         scheduledDate: scheduleDate,
-        isDraft: false
+        isDraft: false,
       });
 
       await newPost.save();
@@ -375,7 +380,7 @@ const postCtrl = {
       const post = await Posts.findOne({
         _id: id,
         user: req.user._id,
-        status: 'scheduled'
+        status: "scheduled",
       });
 
       if (!post) {
@@ -385,7 +390,9 @@ const postCtrl = {
       if (scheduledDate) {
         const scheduleDate = new Date(scheduledDate);
         if (scheduleDate <= new Date()) {
-          return res.status(400).json({ msg: "Scheduled date must be in the future." });
+          return res
+            .status(400)
+            .json({ msg: "Scheduled date must be in the future." });
         }
         post.scheduledDate = scheduleDate;
       }
@@ -411,14 +418,14 @@ const postCtrl = {
       const post = await Posts.findOne({
         _id: id,
         user: req.user._id,
-        status: 'scheduled'
+        status: "scheduled",
       });
 
       if (!post) {
         return res.status(404).json({ msg: "Scheduled post not found." });
       }
 
-      post.status = 'draft';
+      post.status = "draft";
       post.isDraft = true;
       post.scheduledDate = null;
       await post.save();
@@ -438,19 +445,19 @@ const postCtrl = {
       let images = [];
 
       if (req.files && req.files.length > 0) {
-        const filePaths = req.files.map(file => file.path);
+        const filePaths = req.files.map((file) => file.path);
         const uploadResult = await uploadMultipleToCloudinary(filePaths, {
-          folder: 'campus-connect/posts',
-          resourceType: 'auto'
+          folder: "campus-connect/posts",
+          resourceType: "auto",
         });
 
         if (uploadResult.success) {
-          images = uploadResult.results.map(result => ({
+          images = uploadResult.results.map((result) => ({
             url: result.url,
             publicId: result.publicId,
             type: result.type,
             width: result.width,
-            height: result.height
+            height: result.height,
           }));
         }
       }
@@ -464,14 +471,14 @@ const postCtrl = {
         return res.status(403).json({ msg: "Unauthorized." });
       }
 
-      const existingImages = JSON.parse(req.body.existingImages || '[]');
+      const existingImages = JSON.parse(req.body.existingImages || "[]");
       const finalImages = [...existingImages, ...images];
 
       const post = await Posts.findByIdAndUpdate(
         req.params.id,
         {
           content: content || existingPost.content,
-          images: finalImages
+          images: finalImages,
         },
         { new: true }
       )
@@ -484,9 +491,9 @@ const postCtrl = {
           },
         });
 
-      logger.audit('Post updated', req.user._id, {
+      logger.audit("Post updated", req.user._id, {
         postId: req.params.id,
-        newImagesCount: images.length
+        newImagesCount: images.length,
       });
 
       res.json({
@@ -494,9 +501,9 @@ const postCtrl = {
         newPost: post,
       });
     } catch (err) {
-      logger.error('Update post failed', err, {
+      logger.error("Update post failed", err, {
         userId: req.user._id,
-        postId: req.params.id
+        postId: req.params.id,
       });
       return res.status(500).json({ msg: err.message });
     }
@@ -561,8 +568,8 @@ const postCtrl = {
       const features = new APIfeatures(
         Posts.find({
           user: req.params.id,
-          status: 'published',
-          isDraft: false
+          status: "published",
+          isDraft: false,
         }),
         req.query
       ).paginating();
@@ -609,9 +616,9 @@ const postCtrl = {
         {
           $match: {
             user: { $nin: newArr },
-            status: 'published',
-            isDraft: false
-          }
+            status: "published",
+            isDraft: false,
+          },
         },
         { $sample: { size: Number(num) } },
       ]);
@@ -653,32 +660,135 @@ const postCtrl = {
 
   reportPost: async (req, res) => {
     try {
-      const post = await Posts.find({
-        _id: req.params.id,
-        reports: req.user._id,
+      const { reason, description, priority } = req.body;
+      if (!reason) {
+        return res.status(400).json({
+          msg: "Report reason is required.",
+        });
+      }
+      const validReasons = [
+        "spam",
+        "harassment",
+        "hate_speech",
+        "violence",
+        "nudity",
+        "false_information",
+        "scam",
+        "copyright",
+        "self_harm",
+        "other",
+      ];
+      if (!validReasons.includes(reason)) {
+        return res.status(400).json({
+          msg: "Invalid report reason.",
+        });
+      }
+      const existingReport = await Reports.findOne({
+        reportType: "post",
+        targetId: req.params.id,
+        reportedBy: req.user._id,
       });
-      if (post.length > 0) {
-        return res
-          .status(400)
-          .json({ msg: "You have already reported this post" });
+      if (existingReport) {
+        return res.status(400).json({
+          msg: "You have already reported this post.",
+        });
       }
-
-      const report = await Posts.findOneAndUpdate(
-        { _id: req.params.id },
-        {
-          $push: { reports: req.user._id },
-        },
-        {
-          new: true,
-        }
-      );
-
-      if (!report) {
-        return res.status(400).json({ msg: "Post does not exist." });
+      const post = await Posts.findById(req.params.id);
+      if (!post) {
+        return res.status(404).json({ msg: "Post not found." });
       }
-
-      res.json({ msg: "Post reported successfully." });
+      const newReport = new Reports({
+        reportType: "post",
+        targetId: req.params.id,
+        targetModel: "post",
+        reportedBy: req.user._id,
+        reason,
+        description: description || "",
+        priority: priority || "low",
+        status: "pending",
+      });
+      await newReport.save();
+      post.reports.push(newReport._id);
+      await post.incrementReportCount();
+      logger.audit("Post reported", req.user._id, {
+        postId: req.params.id,
+        reason,
+        reportId: newReport._id,
+      });
+      res.json({
+        msg: "Post reported successfully. Our team will review it.",
+        report: newReport,
+      });
     } catch (err) {
+      logger.error("Report post failed", err, {
+        userId: req.user._id,
+        postId: req.params.id,
+      });
+      return res.status(500).json({ msg: err.message });
+    }
+  },
+
+  hidePost: async (req, res) => {
+    try {
+      const { reason } = req.body;
+      const post = await Posts.findById(req.params.id);
+      if (!post) {
+        return res.status(404).json({ msg: "Post not found." });
+      }
+      if (post.hiddenBy.includes(req.user._id)) {
+        return res.status(400).json({
+          msg: "You have already hidden this post.",
+        });
+      }
+      await post.hidePost(req.user._id, reason);
+      logger.info("Post hidden", {
+        postId: req.params.id,
+        userId: req.user._id,
+      });
+      res.json({
+        msg: "Post hidden successfully. You won't see this post in your feed.",
+        post: {
+          _id: post._id,
+          isHidden: post.isHidden,
+        },
+      });
+    } catch (err) {
+      logger.error("Hide post failed", err, {
+        userId: req.user._id,
+        postId: req.params.id,
+      });
+      return res.status(500).json({ msg: err.message });
+    }
+  },
+
+  unhidePost: async (req, res) => {
+    try {
+      const post = await Posts.findById(req.params.id);
+      if (!post) {
+        return res.status(404).json({ msg: "Post not found." });
+      }
+      if (!post.hiddenBy.includes(req.user._id)) {
+        return res.status(400).json({
+          msg: "This post is not hidden by you.",
+        });
+      }
+      await post.unhidePost(req.user._id);
+      logger.info("Post unhidden", {
+        postId: req.params.id,
+        userId: req.user._id,
+      });
+      res.json({
+        msg: "Post unhidden successfully.",
+        post: {
+          _id: post._id,
+          isHidden: post.isHidden,
+        },
+      });
+    } catch (err) {
+      logger.error("Unhide post failed", err, {
+        userId: req.user._id,
+        postId: req.params.id,
+      });
       return res.status(500).json({ msg: err.message });
     }
   },
@@ -742,8 +852,8 @@ const postCtrl = {
       const features = new APIfeatures(
         Posts.find({
           _id: { $in: req.user.saved },
-          status: 'published',
-          isDraft: false
+          status: "published",
+          isDraft: false,
         }),
         req.query
       ).paginating();

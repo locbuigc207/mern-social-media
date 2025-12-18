@@ -338,16 +338,10 @@ const authCtrl = {
         return res.status(400).json({ msg: "Invalid credentials." });
       }
 
-      const isMatch = await bcrypt.compare(password, user.password);
-      if (!isMatch) {
-        return res.status(400).json({ msg: "Invalid credentials." });
-      }
-
       if (user.isBlocked) {
         return res.status(403).json({
-          msg: "Your account has been blocked.",
-          reason: user.blockedReason,
-          isBlocked: true,
+          msg: "Your account has been suspended. Please contact support for assistance.",
+          isBlocked: true
         });
       }
 
@@ -355,7 +349,13 @@ const authCtrl = {
         return res.status(400).json({
           msg: "Please verify your email before logging in.",
           requireVerification: true,
+          email: user.email 
         });
+      }
+
+      const isMatch = await bcrypt.compare(password, user.password);
+      if (!isMatch) {
+        return res.status(400).json({ msg: "Invalid credentials." });
       }
 
       const access_token = createAccessToken({ id: user._id });
@@ -365,7 +365,7 @@ const authCtrl = {
         httpOnly: true,
         path: "/api/refresh_token",
         sameSite: "lax",
-        secure: process.env.NODE_ENV === "production", // FIX: Thêm secure flag
+        secure: process.env.NODE_ENV === "production",
         maxAge: 30 * 24 * 60 * 60 * 1000,
       });
 
