@@ -1,5 +1,7 @@
 const Comments = require("../models/commentModel");
 const Posts = require("../models/postModel");
+const Reports = require("../models/reportModel"); 
+const logger = require("../utils/logger");
 
 const commentCtrl = {
   createComment: async (req, res) => {
@@ -66,7 +68,7 @@ const commentCtrl = {
       if (comment.length > 0) {
         return res
           .status(400)
-          .json({ msg: "You have already liked this post" });
+          .json({ msg: "You have already liked this comment" });
       }
 
       await Comments.findOneAndUpdate(
@@ -139,6 +141,9 @@ const commentCtrl = {
         "violence",
         "nudity",
         "false_information",
+        "bullying",
+        "threats",
+        "self_harm",
         "other",
       ];
 
@@ -146,6 +151,21 @@ const commentCtrl = {
         return res.status(400).json({
           msg: "Invalid report reason.",
         });
+      }
+
+      if (!description || description.trim().length < 10) {
+        return res.status(400).json({
+          msg: "Please provide a detailed description (at least 10 characters).",
+        });
+      }
+
+      if (priority) {
+        const validPriorities = ['low', 'medium', 'high', 'critical'];
+        if (!validPriorities.includes(priority)) {
+          return res.status(400).json({
+            msg: "Invalid priority level.",
+          });
+        }
       }
 
       const existingReport = await Reports.findOne({
@@ -165,14 +185,29 @@ const commentCtrl = {
         return res.status(404).json({ msg: "Comment not found." });
       }
 
+      const priorityMap = {
+        'self_harm': 'critical',
+        'threats': 'critical',
+        'violence': 'high',
+        'harassment': 'high',
+        'bullying': 'high',
+        'hate_speech': 'high',
+        'nudity': 'medium',
+        'false_information': 'medium',
+        'spam': 'low',
+        'other': 'low'
+      };
+
+      const finalPriority = priority || priorityMap[reason] || 'low';
+
       const newReport = new Reports({
         reportType: "comment",
         targetId: req.params.id,
         targetModel: "comment",
         reportedBy: req.user._id,
         reason,
-        description: description || "",
-        priority: priority || "low",
+        description: description.trim(),
+        priority: finalPriority,
         status: "pending",
       });
 
@@ -181,19 +216,23 @@ const commentCtrl = {
       comment.reports.push(newReport._id);
       await comment.incrementReportCount();
 
-      const logger = require("../utils/logger");
       logger.audit("Comment reported", req.user._id, {
         commentId: req.params.id,
         reason,
+        priority: finalPriority,
         reportId: newReport._id,
       });
 
       res.json({
         msg: "Comment reported successfully. Our team will review it.",
-        report: newReport,
+        report: {
+          _id: newReport._id,
+          reason: newReport.reason,
+          priority: newReport.priority,
+          status: newReport.status
+        },
       });
     } catch (err) {
-      const logger = require("../utils/logger");
       logger.error("Report comment failed", err, {
         userId: req.user._id,
         commentId: req.params.id,
@@ -222,7 +261,6 @@ const commentCtrl = {
       comment.isHidden = true;
       await comment.save();
 
-      const logger = require("../utils/logger");
       logger.info("Comment hidden", {
         commentId: req.params.id,
         userId: req.user._id,
@@ -236,7 +274,6 @@ const commentCtrl = {
         },
       });
     } catch (err) {
-      const logger = require("../utils/logger");
       logger.error("Hide comment failed", err, {
         userId: req.user._id,
         commentId: req.params.id,

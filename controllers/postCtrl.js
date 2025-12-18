@@ -131,9 +131,9 @@ const postCtrl = {
           user: [...req.user.following, req.user._id],
           status: "published",
           isDraft: false,
-          isHidden: false, 
-          hiddenBy: { $ne: req.user._id }, 
-          moderationStatus: { $ne: "removed" }, 
+          isHidden: false,
+          hiddenBy: { $ne: req.user._id },
+          moderationStatus: { $ne: "removed" },
         }),
         req.query
       ).paginating();
@@ -661,11 +661,13 @@ const postCtrl = {
   reportPost: async (req, res) => {
     try {
       const { reason, description, priority } = req.body;
+
       if (!reason) {
         return res.status(400).json({
           msg: "Report reason is required.",
         });
       }
+
       const validReasons = [
         "spam",
         "harassment",
@@ -676,48 +678,113 @@ const postCtrl = {
         "scam",
         "copyright",
         "self_harm",
+        "terrorism",
+        "child_exploitation",
         "other",
       ];
+
       if (!validReasons.includes(reason)) {
         return res.status(400).json({
           msg: "Invalid report reason.",
         });
       }
+
+      if (!description || description.trim().length < 10) {
+        return res.status(400).json({
+          msg: "Please provide a detailed description (at least 10 characters) explaining why you're reporting this post.",
+        });
+      }
+
+      if (description.trim().length > 500) {
+        return res.status(400).json({
+          msg: "Description is too long (maximum 500 characters).",
+        });
+      }
+
+      if (priority) {
+        const validPriorities = ["low", "medium", "high", "critical"];
+        if (!validPriorities.includes(priority)) {
+          return res.status(400).json({
+            msg: "Invalid priority level.",
+          });
+        }
+      }
+
       const existingReport = await Reports.findOne({
         reportType: "post",
         targetId: req.params.id,
         reportedBy: req.user._id,
       });
+
       if (existingReport) {
         return res.status(400).json({
           msg: "You have already reported this post.",
         });
       }
+
       const post = await Posts.findById(req.params.id);
       if (!post) {
         return res.status(404).json({ msg: "Post not found." });
       }
+
+      const priorityMap = {
+        child_exploitation: "critical",
+        terrorism: "critical",
+        self_harm: "critical",
+        violence: "high",
+        harassment: "high",
+        hate_speech: "high",
+        threats: "high",
+        nudity: "medium",
+        scam: "medium",
+        false_information: "medium",
+        copyright: "medium",
+        spam: "low",
+        other: "low",
+      };
+
+      const finalPriority = priority || priorityMap[reason] || "low";
+
       const newReport = new Reports({
         reportType: "post",
         targetId: req.params.id,
         targetModel: "post",
         reportedBy: req.user._id,
         reason,
-        description: description || "",
-        priority: priority || "low",
+        description: description.trim(),
+        priority: finalPriority,
         status: "pending",
       });
+
       await newReport.save();
+
       post.reports.push(newReport._id);
       await post.incrementReportCount();
+
       logger.audit("Post reported", req.user._id, {
         postId: req.params.id,
         reason,
+        priority: finalPriority,
         reportId: newReport._id,
       });
+
+      if (finalPriority === "critical") {
+        logger.warn("CRITICAL REPORT RECEIVED", {
+          reportId: newReport._id,
+          postId: req.params.id,
+          reason,
+          reportedBy: req.user._id,
+        });
+      }
+
       res.json({
-        msg: "Post reported successfully. Our team will review it.",
-        report: newReport,
+        msg: "Post reported successfully. Our moderation team will review it shortly.",
+        report: {
+          _id: newReport._id,
+          reason: newReport.reason,
+          priority: newReport.priority,
+          status: newReport.status,
+        },
       });
     } catch (err) {
       logger.error("Report post failed", err, {
@@ -731,22 +798,41 @@ const postCtrl = {
   hidePost: async (req, res) => {
     try {
       const { reason } = req.body;
+
+      if (reason && reason.length > 200) {
+        return res.status(400).json({
+          msg: "Reason is too long (maximum 200 characters).",
+        });
+      }
+
       const post = await Posts.findById(req.params.id);
+
       if (!post) {
         return res.status(404).json({ msg: "Post not found." });
       }
+
+      if (post.user.toString() === req.user._id.toString()) {
+        return res.status(400).json({
+          msg: "You cannot hide your own post. Please use the delete function instead.",
+        });
+      }
+
       if (post.hiddenBy.includes(req.user._id)) {
         return res.status(400).json({
           msg: "You have already hidden this post.",
         });
       }
-      await post.hidePost(req.user._id, reason);
+
+      await post.hidePost(req.user._id, reason || "User preference");
+
       logger.info("Post hidden", {
         postId: req.params.id,
         userId: req.user._id,
+        reason: reason || "Not specified",
       });
+
       res.json({
-        msg: "Post hidden successfully. You won't see this post in your feed.",
+        msg: "Post hidden successfully. You won't see this post in your feed anymore.",
         post: {
           _id: post._id,
           isHidden: post.isHidden,
@@ -764,21 +850,26 @@ const postCtrl = {
   unhidePost: async (req, res) => {
     try {
       const post = await Posts.findById(req.params.id);
+
       if (!post) {
         return res.status(404).json({ msg: "Post not found." });
       }
+
       if (!post.hiddenBy.includes(req.user._id)) {
         return res.status(400).json({
           msg: "This post is not hidden by you.",
         });
       }
+
       await post.unhidePost(req.user._id);
+
       logger.info("Post unhidden", {
         postId: req.params.id,
         userId: req.user._id,
       });
+
       res.json({
-        msg: "Post unhidden successfully.",
+        msg: "Post unhidden successfully. You can now see this post in your feed.",
         post: {
           _id: post._id,
           isHidden: post.isHidden,
@@ -865,6 +956,69 @@ const postCtrl = {
         result: savePosts.length,
       });
     } catch (err) {
+      return res.status(500).json({ msg: err.message });
+    }
+  },
+
+  getHiddenPosts: async (req, res) => {
+    try {
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 20;
+      const skip = (page - 1) * limit;
+
+      const hiddenPosts = await Posts.find({
+        hiddenBy: req.user._id,
+        status: "published",
+        isDraft: false,
+      })
+        .populate("user", "username avatar fullname")
+        .sort("-updatedAt")
+        .skip(skip)
+        .limit(limit);
+
+      const total = await Posts.countDocuments({
+        hiddenBy: req.user._id,
+        status: "published",
+        isDraft: false,
+      });
+
+      res.json({
+        hiddenPosts,
+        total,
+        page,
+        totalPages: Math.ceil(total / limit),
+      });
+    } catch (err) {
+      logger.error("Get hidden posts failed", err, {
+        userId: req.user._id,
+      });
+      return res.status(500).json({ msg: err.message });
+    }
+  },
+
+  unhideAllPosts: async (req, res) => {
+    try {
+      const result = await Posts.updateMany(
+        { hiddenBy: req.user._id },
+        {
+          $pull: { hiddenBy: req.user._id },
+          $set: { isHidden: false },
+        }
+      );
+
+      logger.info("All posts unhidden", {
+        userId: req.user._id,
+        count: result.modifiedCount,
+      });
+
+      res.json({
+        msg: `Successfully unhidden ${result.modifiedCount} post(s).`,
+        count: result.modifiedCount,
+      });
+    } catch (err) {
+      logger.error("Unhide all posts failed", err, {
+        userId: req.user._id,
+      });
       return res.status(500).json({ msg: err.message });
     }
   },

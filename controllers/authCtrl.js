@@ -28,10 +28,17 @@ const authCtrl = {
           .json({ msg: "This email is already registered." });
       }
 
-      if (password.length < 6) {
+      if (password.length < 8) {
         return res
           .status(400)
-          .json({ msg: "Password must be at least 6 characters long." });
+          .json({ msg: "Password must be at least 8 characters long." });
+      }
+
+      const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/;
+      if (!passwordRegex.test(password)) {
+        return res.status(400).json({ 
+          msg: "Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character." 
+        });
       }
 
       const passwordHash = await bcrypt.hash(password, 12);
@@ -169,7 +176,7 @@ const authCtrl = {
         .createHash("sha256")
         .update(resetToken)
         .digest("hex");
-      const resetPasswordExpires = Date.now() + 60 * 60 * 1000; // 1 hour
+      const resetPasswordExpires = Date.now() + 60 * 60 * 1000;
 
       user.resetPasswordToken = resetPasswordToken;
       user.resetPasswordExpires = resetPasswordExpires;
@@ -197,10 +204,17 @@ const authCtrl = {
         return res.status(400).json({ msg: "Passwords do not match." });
       }
 
-      if (password.length < 6) {
+      if (password.length < 8) {
         return res
           .status(400)
-          .json({ msg: "Password must be at least 6 characters long." });
+          .json({ msg: "Password must be at least 8 characters long." });
+      }
+
+      const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/;
+      if (!passwordRegex.test(password)) {
+        return res.status(400).json({ 
+          msg: "Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character." 
+        });
       }
 
       const resetPasswordToken = crypto
@@ -262,10 +276,17 @@ const authCtrl = {
         return res.status(400).json({ msg: "Your old password is wrong." });
       }
 
-      if (newPassword.length < 6) {
+      if (newPassword.length < 8) {
         return res
           .status(400)
-          .json({ msg: "Password must be at least 6 characters long." });
+          .json({ msg: "Password must be at least 8 characters long." });
+      }
+
+      const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/;
+      if (!passwordRegex.test(newPassword)) {
+        return res.status(400).json({ 
+          msg: "Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character." 
+        });
       }
 
       const newPasswordHash = await bcrypt.hash(newPassword, 12);
@@ -299,10 +320,10 @@ const authCtrl = {
           .json({ msg: "This email is already registered." });
       }
 
-      if (password.length < 6) {
+      if (password.length < 8) {
         return res
           .status(400)
-          .json({ msg: "Password must be at least 6 characters long." });
+          .json({ msg: "Password must be at least 8 characters long." });
       }
 
       const passwordHash = await bcrypt.hash(password, 12);
@@ -329,10 +350,7 @@ const authCtrl = {
     try {
       const { email, password } = req.body;
 
-      const user = await Users.findOne({ email, role: "user" }).populate(
-        "followers following",
-        "-password"
-      );
+      const user = await Users.findOne({ email, role: "user" });
 
       if (!user) {
         return res.status(400).json({ msg: "Invalid credentials." });
@@ -341,7 +359,9 @@ const authCtrl = {
       if (user.isBlocked) {
         return res.status(403).json({
           msg: "Your account has been suspended. Please contact support for assistance.",
-          isBlocked: true
+          isBlocked: true,
+          reason: user.blockedReason,
+          blockedAt: user.blockedAt
         });
       }
 
@@ -358,6 +378,9 @@ const authCtrl = {
         return res.status(400).json({ msg: "Invalid credentials." });
       }
 
+      const populatedUser = await Users.findById(user._id)
+        .populate("followers following", "-password");
+
       const access_token = createAccessToken({ id: user._id });
       const refresh_token = createRefreshToken({ id: user._id });
 
@@ -373,7 +396,7 @@ const authCtrl = {
         msg: "Logged in Successfully!",
         access_token,
         user: {
-          ...user._doc,
+          ...populatedUser._doc,
           password: "",
         },
       });
@@ -390,6 +413,13 @@ const authCtrl = {
 
       if (!user) {
         return res.status(400).json({ msg: "Email or Password is incorrect." });
+      }
+
+      if (user.isBlocked) {
+        return res.status(403).json({
+          msg: "Admin account has been disabled. Contact system administrator.",
+          isBlocked: true
+        });
       }
 
       const isMatch = await bcrypt.compare(password, user.password);
@@ -449,6 +479,13 @@ const authCtrl = {
 
           if (!user) {
             return res.status(400).json({ msg: "User does not exist." });
+          }
+
+          if (user.isBlocked && user.role !== 'admin') {
+            return res.status(403).json({ 
+              msg: "Your account has been blocked.",
+              isBlocked: true 
+            });
           }
 
           const access_token = createAccessToken({ id: result.id });
