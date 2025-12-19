@@ -14,12 +14,14 @@ const userSchema = new mongoose.Schema(
       trim: true,
       maxlength: 25,
       unique: true,
+      lowercase: true,
     },
     email: {
       type: String,
       required: true,
       trim: true,
       unique: true,
+      lowercase: true,
     },
     password: {
       type: String,
@@ -34,6 +36,7 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: "user",
       enum: ["user", "admin", "moderator"],
+      index: true,
     },
     gender: {
       type: String,
@@ -90,12 +93,14 @@ const userSchema = new mongoose.Schema(
     isVerified: {
       type: Boolean,
       default: false,
+      index: true,
     },
     verificationToken: String,
     verificationTokenExpires: Date,
     isBlocked: {
       type: Boolean,
       default: false,
+      index: true,
     },
     blockedReason: String,
     blockedByAdmin: {
@@ -161,14 +166,17 @@ const userSchema = new mongoose.Schema(
   }
 );
 
-userSchema.index({ username: 1 });
-userSchema.index({ email: 1 });
+userSchema.index({ username: 1 }, { unique: true });
+userSchema.index({ email: 1 }, { unique: true });
 userSchema.index({ role: 1, isBlocked: 1 });
 userSchema.index({ followers: 1 });
 userSchema.index({ following: 1 });
 userSchema.index({ createdAt: -1 });
 userSchema.index({ blockedUsers: 1 });
 userSchema.index({ blockedBy: 1 });
+userSchema.index({ isVerified: 1, isBlocked: 1 });
+
+userSchema.index({ username: 'text', fullname: 'text', email: 'text' });
 
 userSchema.methods.canResetPassword = function() {
   if (this.resetAttempts >= 5) {
@@ -192,5 +200,15 @@ userSchema.methods.resetPasswordAttempts = async function() {
   this.lastResetAttempt = undefined;
   await this.save();
 };
+
+userSchema.pre('save', function(next) {
+  if (this.isModified('email')) {
+    this.email = this.email.toLowerCase();
+  }
+  if (this.isModified('username')) {
+    this.username = this.username.toLowerCase();
+  }
+  next();
+});
 
 module.exports = mongoose.model("user", userSchema);

@@ -61,48 +61,59 @@ const commentCtrl = {
   }),
 
   likeComment: asyncHandler(async (req, res) => {
-    const comment = await Comments.find({
-      _id: req.params.id,
-      likes: req.user._id,
-    });
-    
-    if (comment.length > 0) {
-      return res.status(400).json({ msg: "You have already liked this comment" });
-    }
-
-    const updatedComment = await Comments.findOneAndUpdate(
-      { _id: req.params.id },
+    const comment = await Comments.findOneAndUpdate(
       {
-        $push: { likes: req.user._id },
+        _id: req.params.id,
+        likes: { $ne: req.user._id }
       },
       {
-        new: true,
-      }
+        $addToSet: { likes: req.user._id }
+      },
+      { new: true }
     );
 
-    if (!updatedComment) {
-      throw new NotFoundError("Comment");
+    if (!comment) {
+      const existingComment = await Comments.findById(req.params.id);
+      if (!existingComment) {
+        throw new NotFoundError('Comment');
+      }
+      return res.status(400).json({
+        msg: "You have already liked this comment"
+      });
     }
 
-    res.json({ msg: "Comment liked successfully." });
+    res.json({
+      msg: "Comment liked successfully.",
+      likesCount: comment.likes.length
+    });
   }),
 
   unLikeComment: asyncHandler(async (req, res) => {
     const comment = await Comments.findOneAndUpdate(
-      { _id: req.params.id },
       {
-        $pull: { likes: req.user._id },
+        _id: req.params.id,
+        likes: req.user._id
       },
       {
-        new: true,
-      }
+        $pull: { likes: req.user._id }
+      },
+      { new: true }
     );
 
     if (!comment) {
-      throw new NotFoundError("Comment");
+      const existingComment = await Comments.findById(req.params.id);
+      if (!existingComment) {
+        throw new NotFoundError('Comment');
+      }
+      return res.status(400).json({
+        msg: "You haven't liked this comment"
+      });
     }
 
-    res.json({ msg: "Comment unliked successfully." });
+    res.json({
+      msg: "Comment unliked successfully.",
+      likesCount: comment.likes.length
+    });
   }),
 
   deleteComment: asyncHandler(async (req, res) => {

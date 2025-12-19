@@ -12,7 +12,7 @@ const extractHashtags = (text) => {
   return [...new Set(matches.map(tag => tag.slice(1).toLowerCase()))];
 };
 
-const processHashtags = async (postId, content) => {
+const processHashtags = async (postId, content, session = null) => {
   try {
     const hashtags = extractHashtags(content);
     
@@ -30,7 +30,11 @@ const processHashtags = async (postId, content) => {
       }
     }));
 
-    await Hashtags.bulkWrite(operations);
+    if (session) {
+      await Hashtags.bulkWrite(operations, { session });
+    } else {
+      await Hashtags.bulkWrite(operations);
+    }
 
     const processedTags = await Hashtags.find({ 
       name: { $in: hashtags } 
@@ -39,31 +43,51 @@ const processHashtags = async (postId, content) => {
     return processedTags;
   } catch (error) {
     console.error('Error processing hashtags:', error);
-    return [];
+    throw error; 
   }
 };
 
-const removePostFromHashtags = async (postId, content) => {
+const removePostFromHashtags = async (postId, content, session = null) => {
   try {
     const hashtags = extractHashtags(content);
     
     if (hashtags.length === 0) return;
 
-    await Hashtags.updateMany(
-      { name: { $in: hashtags } },
-      {
-        $pull: { posts: postId },
-        $inc: { usageCount: -1 }
-      }
-    );
+    if (session) {
+      await Hashtags.updateMany(
+        { name: { $in: hashtags } },
+        {
+          $pull: { posts: postId },
+          $inc: { usageCount: -1 }
+        },
+        { session }
+      );
 
-    await Hashtags.deleteMany({
-      name: { $in: hashtags },
-      posts: { $size: 0 }
-    });
+      await Hashtags.deleteMany(
+        {
+          name: { $in: hashtags },
+          posts: { $size: 0 }
+        },
+        { session }
+      );
+    } else {
+      await Hashtags.updateMany(
+        { name: { $in: hashtags } },
+        {
+          $pull: { posts: postId },
+          $inc: { usageCount: -1 }
+        }
+      );
+
+      await Hashtags.deleteMany({
+        name: { $in: hashtags },
+        posts: { $size: 0 }
+      });
+    }
     
   } catch (error) {
     console.error('Error removing post from hashtags:', error);
+    throw error; 
   }
 };
 
@@ -75,6 +99,11 @@ const getPostsByHashtag = async (hashtagName, options = {}) => {
     const hashtag = await Hashtags.findOne({ name: hashtagName.toLowerCase() })
       .populate({
         path: 'posts',
+        match: { 
+          status: 'published',
+          isDraft: false,
+          moderationStatus: { $ne: 'removed' }
+        },
         options: {
           sort: '-createdAt',
           skip,
@@ -126,6 +155,10 @@ const getTrendingHashtags = async (limit = 20) => {
 const searchHashtags = async (query, limit = 10) => {
   try {
     const sanitizedQuery = query.replace(/[$.]/g, '').trim();
+    
+    if (!sanitizedQuery) {
+      return [];
+    }
     
     const hashtags = await Hashtags.find({
       name: { $regex: sanitizedQuery, $options: 'i' }

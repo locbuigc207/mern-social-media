@@ -1,8 +1,9 @@
 const { Server } = require('socket.io');
 const logger = require('./utils/logger');
 
-let users = new Map();
-let admins = new Map();
+const users = new Map();
+const admins = new Map();
+const userSockets = new Map(); 
 
 const SocketServer = (httpServer) => {
   const io = new Server(httpServer, {
@@ -11,18 +12,31 @@ const SocketServer = (httpServer) => {
       credentials: true
     },
     pingTimeout: 60000,
-    pingInterval: 25000
+    pingInterval: 25000,
+    maxHttpBufferSize: 1e8, 
+    transports: ['websocket', 'polling']
   });
-
 
   const getUsersFromIds = (ids) => {
     try {
-      if (!Array.isArray(ids)) return [];
+      if (!ids || !Array.isArray(ids)) {
+        logger.warn('getUsersFromIds called with invalid ids', { ids });
+        return [];
+      }
+      
       const result = [];
       for (const id of ids) {
         if (!id) continue;
-        const socketId = users.get(id.toString());
-        if (socketId) result.push({ id, socketId });
+        
+        const idStr = id.toString();
+        const socketId = users.get(idStr);
+        
+        if (socketId && io.sockets.sockets.has(socketId)) {
+          result.push({ id: idStr, socketId });
+        } else if (socketId) {
+          users.delete(idStr);
+          userSockets.delete(socketId);
+        }
       }
       return result;
     } catch (error) {
@@ -31,134 +45,406 @@ const SocketServer = (httpServer) => {
     }
   };
 
-  const getFollowersArray = (followers) => Array.isArray(followers) ? followers : [];
-
-  const cleanupStaleConnections = () => {
-    const connectedSockets = Array.from(io.sockets.sockets.keys());
-    for (const [userId, socketId] of users.entries()) {
-      if (!connectedSockets.includes(socketId)) users.delete(userId);
-    }
-    for (const [adminId, socketId] of admins.entries()) {
-      if (!connectedSockets.includes(socketId)) admins.delete(adminId);
-    }
-    logger.info(`🧹 Cleanup complete. Users: ${users.size}, Admins: ${admins.size}`);
+  const getFollowersArray = (followers) => {
+    if (!followers) return [];
+    return Array.isArray(followers) ? followers : [];
   };
 
-  setInterval(cleanupStaleConnections, 5 * 60 * 1000);
+  const cleanupStaleConnections = () => {
+    try {
+      const connectedSockets = new Set(io.sockets.sockets.keys());
+      let cleanedUsers = 0;
+      let cleanedAdmins = 0;
 
+      for (const [userId, socketId] of users.entries()) {
+        if (!connectedSockets.has(socketId)) {
+          users.delete(userId);
+          userSockets.delete(socketId);
+          cleanedUsers++;
+        }
+      }
+
+      for (const [adminId, socketId] of admins.entries()) {
+        if (!connectedSockets.has(socketId)) {
+          admins.delete(adminId);
+          cleanedAdmins++;
+        }
+      }
+
+      if (cleanedUsers > 0 || cleanedAdmins > 0) {
+        logger.info(`🧹 Cleanup: ${cleanedUsers} users, ${cleanedAdmins} admins removed. Current: ${users.size} users, ${admins.size} admins`);
+      }
+    } catch (error) {
+      logger.error('Error in cleanupStaleConnections:', error);
+    }
+  };
+
+  const cleanupInterval = setInterval(cleanupStaleConnections, 5 * 60 * 1000);
+
+  const handleSocketError = (socket, eventName, error, data = {}) => {
+    logger.error(`Socket error in ${eventName}:`, error, {
+      socketId: socket.id,
+      userId: userSockets.get(socket.id),
+      ...data
+    });
+    
+    socket.emit('error', {
+      event: eventName,
+      message: 'Server error occurred',
+      timestamp: new Date().toISOString()
+    });
+  };
+
+  const safeEmitToUsers = (socket, userIds, event, data) => {
+    try {
+      const recipients = getUsersFromIds(userIds);
+      recipients.forEach(({ socketId }) => {
+        try {
+          socket.to(socketId).emit(event, data);
+        } catch (err) {
+          logger.error(`Failed to emit ${event} to ${socketId}:`, err);
+        }
+      });
+    } catch (error) {
+      logger.error(`Error in safeEmitToUsers for event ${event}:`, error);
+    }
+  };
 
   io.on('connection', (socket) => {
     logger.info(`🔌 New socket connection: ${socket.id}`);
 
-    const handleError = (eventName, error, data = {}) => {
-      logger.error(`Socket error in ${eventName}:`, error, data);
-      socket.emit('error', { event: eventName, message: 'Server error' });
-    };
-
     socket.on("joinUser", (id) => {
-      if (!id) return;
-      const userId = id.toString();
-      users.set(userId, socket.id);
-      socket.broadcast.emit("userOnline", userId);
-      socket.emit("connectionStatus", { connected: true, userId, onlineUsers: Array.from(users.keys()) });
-      logger.info(`👤 User joined: ${userId}`);
+      try {
+        if (!id) {
+          logger.warn('joinUser called without id', { socketId: socket.id });
+          return;
+        }
+
+        const userId = id.toString();
+        
+        const existingSocketId = users.get(userId);
+        if (existingSocketId && existingSocketId !== socket.id) {
+          const oldSocket = io.sockets.sockets.get(existingSocketId);
+          if (oldSocket) {
+            oldSocket.emit('duplicateConnection', {
+              message: 'You have been connected from another device'
+            });
+            oldSocket.disconnect(true);
+          }
+          userSockets.delete(existingSocketId);
+        }
+
+        users.set(userId, socket.id);
+        userSockets.set(socket.id, userId);
+        
+        socket.broadcast.emit("userOnline", userId);
+        
+        socket.emit("connectionStatus", {
+          connected: true,
+          userId,
+          onlineUsers: Array.from(users.keys()),
+          timestamp: new Date().toISOString()
+        });
+
+        logger.info(`👤 User joined: ${userId} (socket: ${socket.id})`);
+      } catch (error) {
+        handleSocketError(socket, 'joinUser', error, { id });
+      }
     });
 
     socket.on("joinAdmin", (id) => {
-      if (!id) return;
-      admins.set(id.toString(), socket.id);
-      socket.emit("activeUsers", users.size);
-      logger.info(`👨‍💼 Admin joined: ${id}`);
+      try {
+        if (!id) {
+          logger.warn('joinAdmin called without id');
+          return;
+        }
+
+        const adminId = id.toString();
+        admins.set(adminId, socket.id);
+        
+        socket.emit("activeUsers", {
+          count: users.size,
+          timestamp: new Date().toISOString()
+        });
+
+        logger.info(`👨‍💼 Admin joined: ${adminId} (socket: ${socket.id})`);
+      } catch (error) {
+        handleSocketError(socket, 'joinAdmin', error, { id });
+      }
     });
 
-    socket.on("disconnect", () => {
-      let disconnectedUserId = null;
-      for (const [userId, socketId] of users.entries()) {
-        if (socketId === socket.id) {
-          disconnectedUserId = userId;
+    socket.on("disconnect", (reason) => {
+      try {
+        let disconnectedUserId = null;
+
+        const userId = userSockets.get(socket.id);
+        if (userId) {
           users.delete(userId);
-          break;
+          userSockets.delete(socket.id);
+          disconnectedUserId = userId;
         }
-      }
-      for (const [adminId, socketId] of admins.entries()) {
-        if (socketId === socket.id) {
-          admins.delete(adminId);
-          break;
+
+        for (const [adminId, socketId] of admins.entries()) {
+          if (socketId === socket.id) {
+            admins.delete(adminId);
+            break;
+          }
         }
+
+        if (disconnectedUserId) {
+          socket.broadcast.emit("userOffline", {
+            userId: disconnectedUserId,
+            timestamp: new Date().toISOString()
+          });
+        }
+
+        logger.info(`👋 Disconnected: ${socket.id} (reason: ${reason}, user: ${disconnectedUserId || 'N/A'})`);
+      } catch (error) {
+        logger.error('Error in disconnect handler:', error);
       }
-      if (disconnectedUserId) socket.broadcast.emit("userOffline", disconnectedUserId);
-      logger.info(`👋 Disconnected: ${socket.id}`);
     });
 
-    const handlePostEvent = (newPost, clientEvent) => {
-      if (!newPost?.user) return;
-      const ids = [...getFollowersArray(newPost.user.followers), newPost.user._id];
-      getUsersFromIds(ids).forEach(c => socket.to(c.socketId).emit(clientEvent, newPost));
+    const handlePostEvent = (eventName, clientEvent) => {
+      socket.on(eventName, (newPost) => {
+        try {
+          if (!newPost || !newPost.user) {
+            logger.warn(`${eventName} called with invalid data`);
+            return;
+          }
+
+          const followers = getFollowersArray(newPost.user.followers);
+          const recipientIds = [...followers, newPost.user._id];
+          
+          safeEmitToUsers(socket, recipientIds, clientEvent, newPost);
+        } catch (error) {
+          handleSocketError(socket, eventName, error, { newPost });
+        }
+      });
     };
 
-    socket.on("likePost", (p) => handlePostEvent(p, "likeToClient"));
-    socket.on("unLikePost", (p) => handlePostEvent(p, "unLikeToClient"));
-    socket.on("createComment", (p) => handlePostEvent(p, "createCommentToClient"));
-    socket.on("deleteComment", (p) => handlePostEvent(p, "deleteCommentToClient"));
+    handlePostEvent("likePost", "likeToClient");
+    handlePostEvent("unLikePost", "unLikeToClient");
+    handlePostEvent("createComment", "createCommentToClient");
+    handlePostEvent("deleteComment", "deleteCommentToClient");
 
     socket.on("createNotify", (msg) => {
-      if (!msg?.recipients) return;
-      const recipients = Array.isArray(msg.recipients) ? msg.recipients : [msg.recipients];
-      getUsersFromIds(recipients).forEach(c => socket.to(c.socketId).emit("createNotifyToClient", msg));
+      try {
+        if (!msg || !msg.recipients) {
+          logger.warn('createNotify called without recipients');
+          return;
+        }
+
+        const recipients = Array.isArray(msg.recipients) ? msg.recipients : [msg.recipients];
+        safeEmitToUsers(socket, recipients, "createNotifyToClient", msg);
+      } catch (error) {
+        handleSocketError(socket, 'createNotify', error, { msg });
+      }
     });
 
     socket.on("addMessage", (msg) => {
-      if (!msg?.recipient) return;
-      const socketId = users.get(msg.recipient.toString());
-      if (socketId) {
-        socket.to(socketId).emit("addMessageToClient", msg);
-        socket.emit("messageDelivered", { messageId: msg._id, deliveredAt: new Date() });
+      try {
+        if (!msg || !msg.recipient) {
+          logger.warn('addMessage called without recipient');
+          return;
+        }
+
+        const recipientId = msg.recipient.toString();
+        const socketId = users.get(recipientId);
+        
+        if (socketId && io.sockets.sockets.has(socketId)) {
+          socket.to(socketId).emit("addMessageToClient", msg);
+          socket.emit("messageDelivered", {
+            messageId: msg._id,
+            deliveredAt: new Date().toISOString()
+          });
+        } else {
+          socket.emit("messageOffline", {
+            messageId: msg._id,
+            recipient: recipientId
+          });
+        }
+      } catch (error) {
+        handleSocketError(socket, 'addMessage', error, { msg });
       }
     });
 
-    socket.on("typing", (d) => {
-      const sId = users.get(d?.recipientId?.toString());
-      if (sId) socket.to(sId).emit("userTyping", { userId: d.userId, isTyping: d.isTyping });
+    socket.on("typing", (data) => {
+      try {
+        if (!data || !data.recipientId) {
+          return;
+        }
+
+        const socketId = users.get(data.recipientId.toString());
+        if (socketId && io.sockets.sockets.has(socketId)) {
+          socket.to(socketId).emit("userTyping", {
+            userId: data.userId,
+            isTyping: data.isTyping,
+            timestamp: new Date().toISOString()
+          });
+        }
+      } catch (error) {
+        handleSocketError(socket, 'typing', error, { data });
+      }
     });
 
-    socket.on("createStory", (d) => {
-      if (!d?.story) return;
-      getUsersFromIds(getFollowersArray(d.followers)).forEach(c => {
-        socket.to(c.socketId).emit("newStoryAlert", { user: d.story.user, storyId: d.story._id });
-      });
+    socket.on("createStory", (data) => {
+      try {
+        if (!data || !data.story) {
+          logger.warn('createStory called without story data');
+          return;
+        }
+
+        const followers = getFollowersArray(data.followers);
+        safeEmitToUsers(socket, followers, "newStoryAlert", {
+          user: data.story.user,
+          storyId: data.story._id,
+          timestamp: new Date().toISOString()
+        });
+      } catch (error) {
+        handleSocketError(socket, 'createStory', error, { data });
+      }
     });
 
-    socket.on("joinGroup", (id) => { if(id) socket.join(`group_${id}`); });
-    
-    socket.on("sendGroupMessage", (d) => {
-      if (d?.groupId) socket.to(`group_${d.groupId}`).emit("newGroupMessage", { ...d, timestamp: new Date() });
+    socket.on("joinGroup", (groupId) => {
+      try {
+        if (!groupId) {
+          logger.warn('joinGroup called without groupId');
+          return;
+        }
+        
+        const roomName = `group_${groupId}`;
+        socket.join(roomName);
+        
+        socket.emit("joinedGroup", {
+          groupId,
+          timestamp: new Date().toISOString()
+        });
+        
+        logger.info(`User joined group: ${groupId} (socket: ${socket.id})`);
+      } catch (error) {
+        handleSocketError(socket, 'joinGroup', error, { groupId });
+      }
     });
 
-    socket.on("groupCallStarted", (d) => {
-      if (d?.groupId) socket.to(`group_${d.groupId}`).emit("incomingGroupCall", { ...d, timestamp: new Date() });
+    socket.on("leaveGroup", (groupId) => {
+      try {
+        if (!groupId) return;
+        
+        const roomName = `group_${groupId}`;
+        socket.leave(roomName);
+        
+        logger.info(`User left group: ${groupId} (socket: ${socket.id})`);
+      } catch (error) {
+        handleSocketError(socket, 'leaveGroup', error, { groupId });
+      }
     });
 
-    socket.on("groupTyping", (d) => {
-      if (d?.groupId) socket.to(`group_${d.groupId}`).emit("groupTypingStatus", d);
+    socket.on("sendGroupMessage", (data) => {
+      try {
+        if (!data || !data.groupId) {
+          logger.warn('sendGroupMessage called without groupId');
+          return;
+        }
+
+        const roomName = `group_${data.groupId}`;
+        socket.to(roomName).emit("newGroupMessage", {
+          ...data,
+          timestamp: new Date().toISOString()
+        });
+      } catch (error) {
+        handleSocketError(socket, 'sendGroupMessage', error, { data });
+      }
     });
 
-    socket.on("editGroupMessage", (d) => {
-      if (d?.groupId) socket.to(`group_${d.groupId}`).emit("groupMessageEdited", d);
+    socket.on("groupTyping", (data) => {
+      try {
+        if (!data || !data.groupId) return;
+
+        const roomName = `group_${data.groupId}`;
+        socket.to(roomName).emit("groupTypingStatus", {
+          ...data,
+          timestamp: new Date().toISOString()
+        });
+      } catch (error) {
+        handleSocketError(socket, 'groupTyping', error, { data });
+      }
     });
 
-    socket.on("pinGroupMessage", (d) => {
-      if (d?.groupId) socket.to(`group_${d.groupId}`).emit("groupMessagePinned", d);
+    socket.on("editGroupMessage", (data) => {
+      try {
+        if (!data || !data.groupId) return;
+
+        const roomName = `group_${data.groupId}`;
+        socket.to(roomName).emit("groupMessageEdited", data);
+      } catch (error) {
+        handleSocketError(socket, 'editGroupMessage', error, { data });
+      }
     });
-    
-  }); 
+
+    socket.on("pinGroupMessage", (data) => {
+      try {
+        if (!data || !data.groupId) return;
+
+        const roomName = `group_${data.groupId}`;
+        socket.to(roomName).emit("groupMessagePinned", data);
+      } catch (error) {
+        handleSocketError(socket, 'pinGroupMessage', error, { data });
+      }
+    });
+
+    socket.on("groupCallStarted", (data) => {
+      try {
+        if (!data || !data.groupId) return;
+
+        const roomName = `group_${data.groupId}`;
+        socket.to(roomName).emit("incomingGroupCall", {
+          ...data,
+          timestamp: new Date().toISOString()
+        });
+      } catch (error) {
+        handleSocketError(socket, 'groupCallStarted', error, { data });
+      }
+    });
+
+    socket.on('error', (error) => {
+      logger.error('Socket error:', error, { socketId: socket.id });
+    });
+  });
 
   io.getStats = () => ({
     totalUsers: users.size,
     totalAdmins: admins.size,
     connectedSockets: io.sockets.sockets.size,
-    onlineUsers: Array.from(users.keys())
+    onlineUsers: Array.from(users.keys()),
+    timestamp: new Date().toISOString()
   });
 
+  io.shutdown = async () => {
+    try {
+      clearInterval(cleanupInterval);
+      
+      io.emit('serverShutdown', {
+        message: 'Server is shutting down',
+        timestamp: new Date().toISOString()
+      });
+
+      const sockets = await io.fetchSockets();
+      for (const socket of sockets) {
+        socket.disconnect(true);
+      }
+
+      users.clear();
+      admins.clear();
+      userSockets.clear();
+
+      logger.info(' Socket.IO shutdown complete');
+    } catch (error) {
+      logger.error('Error during socket shutdown:', error);
+    }
+  };
+
+  logger.info(' Socket.IO server initialized');
+  
   return io;
 };
 

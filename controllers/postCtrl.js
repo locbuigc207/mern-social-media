@@ -80,42 +80,54 @@ const postCtrl = {
       }
     }
 
-    const newPost = new Posts({
-      content: content || "",
-      images,
-      user: req.user._id,
-      status: status || "published",
-      isDraft: isDraft || false,
-      scheduledDate: scheduledDate ? new Date(scheduledDate) : null,
-      publishedAt: status === "published" ? new Date() : null,
-    });
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
-    await newPost.save();
+    try {
+      const newPost = new Posts({
+        content: content || "",
+        images,
+        user: req.user._id,
+        status: status || "published",
+        isDraft: isDraft || false,
+        scheduledDate: scheduledDate ? new Date(scheduledDate) : null,
+        publishedAt: status === "published" ? new Date() : null,
+      });
 
-    if (content && status === "published") {
-      await processHashtags(newPost._id, content);
+      await newPost.save({ session });
+
+      if (content && status === "published") {
+        await processHashtags(newPost._id, content, session);
+      }
+
+      await session.commitTransaction();
+
+      logger.audit("Post created", req.user._id, {
+        postId: newPost._id,
+        status: newPost.status,
+        imagesCount: images.length,
+      });
+
+      let message = "Post created successfully.";
+      if (status === "scheduled") {
+        message = "Post scheduled successfully.";
+      } else if (isDraft) {
+        message = "Draft saved successfully.";
+      }
+
+      res.json({
+        msg: message,
+        newPost: {
+          ...newPost._doc,
+          user: req.user,
+        },
+      });
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
     }
-
-    logger.audit("Post created", req.user._id, {
-      postId: newPost._id,
-      status: newPost.status,
-      imagesCount: images.length,
-    });
-
-    let message = "Post created successfully.";
-    if (status === "scheduled") {
-      message = "Post scheduled successfully.";
-    } else if (isDraft) {
-      message = "Draft saved successfully.";
-    }
-
-    res.json({
-      msg: message,
-      newPost: {
-        ...newPost._doc,
-        user: req.user,
-      },
-    });
   }),
 
   getPosts: asyncHandler(async (req, res) => {
@@ -217,39 +229,57 @@ const postCtrl = {
   publishDraft: asyncHandler(async (req, res) => {
     const { id } = req.params;
 
-    const post = await Posts.findOne({
-      _id: id,
-      user: req.user._id,
-      isDraft: true,
-    });
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
-    if (!post) {
-      throw new NotFoundError("Draft not found.");
-    }
+    try {
+      const post = await Posts.findOne({
+        _id: id,
+        user: req.user._id,
+        isDraft: true,
+      }).session(session);
 
-    if (post.images.length === 0) {
-      throw new ValidationError("Please add at least one image before publishing.");
-    }
+      if (!post) {
+        await session.abortTransaction();
+        throw new NotFoundError("Draft not found.");
+      }
 
-    post.status = "published";
-    post.isDraft = false;
-    post.publishedAt = new Date();
-    await post.save();
+      if (post.images.length === 0) {
+        await session.abortTransaction();
+        throw new ValidationError("Please add at least one image before publishing.");
+      }
 
-    const populatedPost = await Posts.findById(id)
-      .populate("user likes", "avatar username fullname followers")
-      .populate({
-        path: "comments",
-        populate: {
-          path: "user likes",
-          select: "-password",
-        },
+      post.status = "published";
+      post.isDraft = false;
+      post.publishedAt = new Date();
+      await post.save({ session });
+
+      if (post.content) {
+        await processHashtags(post._id, post.content, session);
+      }
+
+      await session.commitTransaction();
+
+      const populatedPost = await Posts.findById(id)
+        .populate("user likes", "avatar username fullname followers")
+        .populate({
+          path: "comments",
+          populate: {
+            path: "user likes",
+            select: "-password",
+          },
+        });
+
+      res.json({
+        msg: "Draft published successfully.",
+        post: populatedPost,
       });
-
-    res.json({
-      msg: "Draft published successfully.",
-      post: populatedPost,
-    });
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
+    }
   }),
 
   updateDraft: asyncHandler(async (req, res) => {
@@ -591,7 +621,7 @@ const postCtrl = {
       ]);
 
       if (post.content) {
-        await removePostFromHashtags(req.params.id, post.content);
+        await removePostFromHashtags(req.params.id, post.content, session);
       }
 
       await Posts.findByIdAndDelete(req.params.id).session(session);

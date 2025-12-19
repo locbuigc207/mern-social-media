@@ -2,6 +2,7 @@ const Users = require("../models/userModel");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
+const mongoose = require("mongoose");
 const {
   sendEmail,
   getVerificationEmailTemplate,
@@ -231,35 +232,49 @@ const authCtrl = {
       .update(token)
       .digest("hex");
 
-    const user = await Users.findOne({
-      resetPasswordToken,
-      resetPasswordExpires: { $gt: Date.now() },
-    });
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
-    if (!user) {
-      throw new ValidationError("Password reset token is invalid or has expired.");
-    }
+    try {
+      const user = await Users.findOne({
+        resetPasswordToken,
+        resetPasswordExpires: { $gt: Date.now() },
+      }).session(session);
 
-    if (user.previousResetTokens && user.previousResetTokens.length > 0) {
-      const isInvalidated = user.previousResetTokens.some(
-        old => old.token === resetPasswordToken
-      );
-      
-      if (isInvalidated) {
-        throw new ValidationError("This reset link has been invalidated. Please request a new one.");
+      if (!user) {
+        await session.abortTransaction();
+        throw new ValidationError("Password reset token is invalid or has expired.");
       }
+
+      if (user.previousResetTokens && user.previousResetTokens.length > 0) {
+        const isInvalidated = user.previousResetTokens.some(
+          old => old.token === resetPasswordToken
+        );
+        
+        if (isInvalidated) {
+          await session.abortTransaction();
+          throw new ValidationError("This reset link has been invalidated. Please request a new one.");
+        }
+      }
+
+      const passwordHash = await bcrypt.hash(password, 12);
+
+      user.password = passwordHash;
+      user.resetPasswordToken = undefined;
+      user.resetPasswordExpires = undefined;
+      user.resetAttempts = 0;
+      user.previousResetTokens = [];
+      
+      await user.save({ session });
+      await session.commitTransaction();
+
+      res.json({ msg: "Password reset successful! You can now login." });
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
     }
-
-    const passwordHash = await bcrypt.hash(password, 12);
-
-    user.password = passwordHash;
-    user.resetPasswordToken = undefined;
-    user.resetPasswordExpires = undefined;
-    user.resetAttempts = 0;
-    user.previousResetTokens = []; 
-    await user.save();
-
-    res.json({ msg: "Password reset successful! You can now login." });
   }),
 
   changePassword: asyncHandler(async (req, res) => {

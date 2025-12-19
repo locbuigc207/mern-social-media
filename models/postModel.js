@@ -23,6 +23,8 @@ const postSchema = new Schema(
     user: {
       type: mongoose.Types.ObjectId,
       ref: "user",
+      required: true,
+      index: true,
     },
     reports: [
       {
@@ -55,13 +57,16 @@ const postSchema = new Schema(
     },
     scheduledDate: {
       type: Date,
+      index: true,
     },
     publishedAt: {
       type: Date,
+      index: true,
     },
     isDraft: {
       type: Boolean,
       default: false,
+      index: true,
     },
     moderationStatus: {
       type: String,
@@ -81,17 +86,21 @@ const postSchema = new Schema(
   }
 );
 
-postSchema.index({ scheduledDate: 1, status: 1 });
 postSchema.index({ user: 1, createdAt: -1 });
-postSchema.index({ status: 1, scheduledDate: 1 });
 postSchema.index({ status: 1, isDraft: 1 });
+postSchema.index({ status: 1, scheduledDate: 1 });
 postSchema.index({ user: 1, status: 1, isDraft: 1 });
 postSchema.index({ user: 1, status: 1, isDraft: 1, createdAt: -1 });
 postSchema.index({ status: 1, createdAt: -1 });
 postSchema.index({ reportCount: -1, moderationStatus: 1 });
-
 postSchema.index({ status: 1, isDraft: 1, hiddenBy: 1, createdAt: -1 });
 postSchema.index({ user: 1, status: 1, isDraft: 1, moderationStatus: 1 });
+
+postSchema.index({ likes: 1 });
+
+postSchema.index({ status: 1, isDraft: 1, moderationStatus: 1, createdAt: -1 });
+
+postSchema.index({ content: 'text' });
 
 postSchema.methods.incrementReportCount = function () {
   this.reportCount += 1;
@@ -123,5 +132,12 @@ postSchema.methods.unhidePost = function (userId) {
   }
   return this.save();
 };
+
+postSchema.pre('save', function(next) {
+  if (this.isModified('status') && this.status === 'published' && !this.publishedAt) {
+    this.publishedAt = new Date();
+  }
+  next();
+});
 
 module.exports = mongoose.model("post", postSchema);
