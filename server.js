@@ -6,19 +6,18 @@ const cookieParser = require("cookie-parser");
 const path = require("path");
 const { createServer } = require("http");
 const helmet = require("helmet");
-const SocketServer = require("./socketServer");
-const logger = require("./utils/logger");
+const mongoSanitize = require('express-mongo-sanitize');
+const xss = require('xss-clean');
 
+const logger = require("./utils/logger");
 const shutdownManager = require("./utils/shutdown");
 const { startPostScheduler, stopScheduler: stopPostScheduler } = require("./utils/postScheduler");
 const { startCleanupSchedulers, stopCleanupSchedulers } = require("./utils/cleanupScheduler");
 const { closeRateLimiter } = require("./middleware/rateLimiter");
-
-const { errorHandler } = require("./middleware/errorHandler");
+const { errorHandler, notFound } = require("./middleware/errorHandler");
 
 const app = express();
 
-// ✅ FIXED: Add security headers
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -26,7 +25,7 @@ app.use(helmet({
       styleSrc: ["'self'", "'unsafe-inline'"],
       scriptSrc: ["'self'"],
       imgSrc: ["'self'", "data:", "https://res.cloudinary.com"],
-      connectSrc: ["'self'"],
+      connectSrc: ["'self'", process.env.CLIENT_URL || "http://localhost:3000"],
     },
   },
   hsts: {
@@ -36,27 +35,19 @@ app.use(helmet({
   }
 }));
 
-// ✅ FIXED: Add input sanitization
-const mongoSanitize = require('express-mongo-sanitize');
-const xss = require('xss-clean');
-
-// Middleware
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-// ✅ Apply sanitization
-app.use(mongoSanitize({
-  replaceWith: '_'
-}));
+app.use(mongoSanitize({ replaceWith: '_' }));
 app.use(xss());
 
 app.use(cors({
   origin: process.env.CLIENT_URL || "http://localhost:3000",
   credentials: true
 }));
+
 app.use(cookieParser());
 
-// ✅ HTTPS redirect in production
 if (process.env.NODE_ENV === 'production') {
   app.use((req, res, next) => {
     if (req.header('x-forwarded-proto') !== 'https') {
@@ -67,20 +58,18 @@ if (process.env.NODE_ENV === 'production') {
   });
 }
 
-// Static files
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-// Health check endpoint
 app.get("/health", (req, res) => {
   res.json({
     status: "ok",
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    environment: process.env.NODE_ENV
+    environment: process.env.NODE_ENV || 'development',
+    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
   });
 });
 
-// API Routes
 app.use("/api", require("./routes/authRouter"));
 app.use("/api", require("./routes/userRouter"));
 app.use("/api", require("./routes/postRouter"));
@@ -92,37 +81,49 @@ app.use("/api", require("./routes/storyRouter"));
 app.use("/api", require("./routes/groupRouter"));
 app.use("/api", require("./routes/hashtagRouter"));
 
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({
-    status: "error",
-    message: "Route not found",
-    path: req.originalUrl
-  });
-});
+app.use(notFound);
 
 app.use(errorHandler);
 
-// ✅ FIXED: Add connection pooling and better configuration
+const validateEnv = () => {
+  const required = [
+    'MONGODB_URL',
+    'ACCESS_TOKEN_SECRET',
+    'REFRESH_TOKEN_SECRET',
+    'JWT_SECRET'
+  ];
+
+  const missing = required.filter(key => !process.env[key]);
+  
+  if (missing.length > 0) {
+    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+  }
+
+  const defaults = [
+    { key: 'ACCESS_TOKEN_SECRET', default: 'your_access_token_secret_here_change_this' },
+    { key: 'REFRESH_TOKEN_SECRET', default: 'your_refresh_token_secret_here_change_this' },
+    { key: 'JWT_SECRET', default: 'your_secret_key_here_make_it_long_and_random' }
+  ];
+
+  for (const { key, default: defaultValue } of defaults) {
+    if (process.env[key] === defaultValue) {
+      throw new Error(`${key} must be changed from default value`);
+    }
+  }
+
+  if (!process.env.MONGODB_URL.startsWith('mongodb://') && 
+      !process.env.MONGODB_URL.startsWith('mongodb+srv://')) {
+    throw new Error('Invalid MONGODB_URL format');
+  }
+
+  logger.info(' Environment variables validated');
+};
+
 const connectDB = async () => {
   try {
-    // ✅ Validate environment variables
-    if (!process.env.MONGODB_URL) {
-      throw new Error('MONGODB_URL is not defined in environment variables');
-    }
-
-    if (!process.env.ACCESS_TOKEN_SECRET || process.env.ACCESS_TOKEN_SECRET === 'your_access_token_secret_here_change_this') {
-      throw new Error('ACCESS_TOKEN_SECRET must be changed from default value');
-    }
-
-    if (!process.env.REFRESH_TOKEN_SECRET || process.env.REFRESH_TOKEN_SECRET === 'your_refresh_token_secret_here_change_this') {
-      throw new Error('REFRESH_TOKEN_SECRET must be changed from default value');
-    }
+    validateEnv();
 
     await mongoose.connect(process.env.MONGODB_URL, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-      // ✅ FIXED: Add connection pooling
       maxPoolSize: 50,
       minPoolSize: 10,
       socketTimeoutMS: 45000,
@@ -130,9 +131,9 @@ const connectDB = async () => {
       family: 4
     });
     
-    logger.info("MongoDB Connected Successfully");
+    logger.info("✅ MongoDB Connected Successfully");
   } catch (error) {
-    logger.error("MongoDB Connection Error:", error);
+    logger.error("❌ MongoDB Connection Error:", error);
     process.exit(1);
   }
 };
@@ -151,7 +152,8 @@ mongoose.connection.on("disconnected", () => {
 
 const httpServer = createServer(app);
 
-SocketServer(httpServer);
+const SocketServer = require("./socketServer");
+const io = SocketServer(httpServer);
 
 const PORT = process.env.PORT || 5000;
 
@@ -160,8 +162,9 @@ const startServer = async () => {
     await connectDB();
 
     const server = httpServer.listen(PORT, () => {
-      logger.info(`Server is running on port ${PORT}`);
-      logger.info(`Environment: ${process.env.NODE_ENV}`);
+      logger.info(` Server is running on port ${PORT}`);
+      logger.info(` Environment: ${process.env.NODE_ENV || 'development'}`);
+      logger.info(` Client URL: ${process.env.CLIENT_URL || 'http://localhost:3000'}`);
     });
 
     shutdownManager.register('http', async () => {
@@ -193,12 +196,12 @@ const startServer = async () => {
       logger.info('Cleanup schedulers stopped');
     });
 
-    await startPostScheduler();
+    await startPostScheduler(io);
     startCleanupSchedulers();
 
-    logger.info('All systems initialized successfully');
+    logger.info(' All systems initialized successfully');
   } catch (error) {
-    logger.error('Failed to start server:', error);
+    logger.error(' Failed to start server:', error);
     process.exit(1);
   }
 };

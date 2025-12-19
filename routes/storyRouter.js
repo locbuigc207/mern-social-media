@@ -6,10 +6,8 @@ const storySchemas = require("../schemas/storySchema");
 const validateObjectId = require("../middleware/validateObjectId");
 const { rateLimitByUser, validateFileUpload } = require("../middleware/validation");
 
-// Rate limiting: 30 stories per hour
 const storyRateLimit = rateLimitByUser(30, 60 * 60 * 1000);
 
-// Create story
 router.post("/story", 
   auth, 
   storyRateLimit,
@@ -18,27 +16,23 @@ router.post("/story",
   storyCtrl.createStory
 );
 
-// Get stories feed
 router.get("/stories/feed", 
   auth, 
   storyCtrl.getStoriesFeed
 );
 
-// Get user stories
 router.get("/stories/user/:userId", 
   auth,
   validateObjectId('userId'),
   storyCtrl.getUserStories
 );
 
-// View story
 router.post("/story/:storyId/view", 
   auth,
   validateObjectId('storyId'),
   storyCtrl.viewStory
 );
 
-// Reply to story
 router.post("/story/:storyId/reply", 
   auth,
   validateObjectId('storyId'),
@@ -47,14 +41,12 @@ router.post("/story/:storyId/reply",
   storyCtrl.replyToStory
 );
 
-// Delete story
 router.delete("/story/:storyId", 
   auth,
   validateObjectId('storyId'),
   storyCtrl.deleteStory
 );
 
-// Add to highlights
 router.post("/story/:storyId/highlight", 
   auth,
   validateObjectId('storyId'),
@@ -62,14 +54,12 @@ router.post("/story/:storyId/highlight",
   storyCtrl.addToHighlight
 );
 
-// Get highlights
 router.get("/stories/highlights/:userId", 
   auth,
   validateObjectId('userId'),
   storyCtrl.getHighlights
 );
 
-// Get story views
 router.get("/story/:storyId/views", 
   auth,
   validateObjectId('storyId'),

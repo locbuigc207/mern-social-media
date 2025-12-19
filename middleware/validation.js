@@ -394,7 +394,6 @@ const validateNoDuplicates = (field) => {
   };
 };
 
-// Validate boolean
 const validateBoolean = (field) => {
   return (req, res, next) => {
     const value = req.body[field];
@@ -409,7 +408,6 @@ const validateBoolean = (field) => {
       );
     }
 
-    // Convert string to boolean
     if (typeof value === 'string') {
       req.body[field] = value === 'true';
     }

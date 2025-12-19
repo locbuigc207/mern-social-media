@@ -145,7 +145,6 @@ const authCtrl = {
     res.json({ msg: "Verification email sent successfully!" });
   }),
 
-  // ✅ FIXED: Improved forgotPassword with token invalidation
   forgotPassword: asyncHandler(async (req, res) => {
     const { email } = req.body;
 
@@ -157,7 +156,6 @@ const authCtrl = {
       });
     }
 
-    // ✅ Check rate limit
     if (user.resetPasswordExpires && user.resetPasswordExpires > Date.now()) {
       const waitTime = Math.ceil((user.resetPasswordExpires - Date.now()) / 60000);
       return res.status(429).json({
@@ -165,7 +163,6 @@ const authCtrl = {
       });
     }
 
-    // ✅ NEW: Store old token in history before invalidating
     if (user.resetPasswordToken) {
       user.previousResetTokens = user.previousResetTokens || [];
       user.previousResetTokens.push({
@@ -173,13 +170,11 @@ const authCtrl = {
         invalidatedAt: new Date()
       });
       
-      // Keep only last 5 invalidated tokens
       if (user.previousResetTokens.length > 5) {
         user.previousResetTokens = user.previousResetTokens.slice(-5);
       }
     }
 
-    // ✅ Generate NEW token (this invalidates old one)
     const resetToken = crypto.randomBytes(32).toString("hex");
     const resetPasswordToken = crypto
       .createHash("sha256")
@@ -190,7 +185,6 @@ const authCtrl = {
     user.resetPasswordExpires = Date.now() + 60 * 60 * 1000;
     user.resetAttempts = (user.resetAttempts || 0) + 1;
     
-    // ✅ Lock account after 5 attempts
     if (user.resetAttempts > 5) {
       user.isBlocked = true;
       user.blockedReason = "Too many password reset attempts";
@@ -213,7 +207,6 @@ const authCtrl = {
     });
   }),
 
-  // ✅ FIXED: Check for invalidated tokens
   resetPassword: asyncHandler(async (req, res) => {
     const { token } = req.params;
     const { password, confirmPassword } = req.body;
@@ -247,7 +240,6 @@ const authCtrl = {
       throw new ValidationError("Password reset token is invalid or has expired.");
     }
 
-    // ✅ NEW: Check if token was invalidated
     if (user.previousResetTokens && user.previousResetTokens.length > 0) {
       const isInvalidated = user.previousResetTokens.some(
         old => old.token === resetPasswordToken
@@ -264,7 +256,7 @@ const authCtrl = {
     user.resetPasswordToken = undefined;
     user.resetPasswordExpires = undefined;
     user.resetAttempts = 0;
-    user.previousResetTokens = []; // ✅ Clear history
+    user.previousResetTokens = []; 
     await user.save();
 
     res.json({ msg: "Password reset successful! You can now login." });
@@ -450,7 +442,6 @@ const authCtrl = {
     return res.json({ msg: "Logged out Successfully." });
   }),
 
-  // ✅ FIXED: Convert callback to async/await
   generateAccessToken: asyncHandler(async (req, res) => {
     const rf_token = req.cookies.refreshtoken;
 
@@ -459,7 +450,6 @@ const authCtrl = {
     }
     
     try {
-      // ✅ Convert to promise-based
       const result = await new Promise((resolve, reject) => {
         jwt.verify(rf_token, process.env.REFRESH_TOKEN_SECRET, (err, decoded) => {
           if (err) reject(err);

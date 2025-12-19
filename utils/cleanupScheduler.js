@@ -6,7 +6,6 @@ const logger = require("./logger");
 
 const intervals = [];
 
-// Clean up expired stories (run every hour)
 const cleanupExpiredStories = cron.schedule("0 * * * *", async () => {
   try {
     logger.info("Starting expired stories cleanup...");
@@ -24,7 +23,6 @@ const cleanupExpiredStories = cron.schedule("0 * * * *", async () => {
   }
 });
 
-// Clean up old deleted messages (run daily at 2 AM)
 const cleanupOldDeletedMessages = cron.schedule("0 2 * * *", async () => {
   try {
     logger.info("Starting old deleted messages cleanup...");
@@ -32,7 +30,6 @@ const cleanupOldDeletedMessages = cron.schedule("0 2 * * *", async () => {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    // Delete messages that have been soft-deleted by both users for more than 30 days
     const result = await Message.deleteMany({
       $expr: { $gte: [{ $size: "$deletedFor" }, 2] },
       updatedAt: { $lt: thirtyDaysAgo }
@@ -46,7 +43,6 @@ const cleanupOldDeletedMessages = cron.schedule("0 2 * * *", async () => {
   }
 });
 
-// Clean up inactive groups (run weekly on Sunday at 3 AM)
 const cleanupInactiveGroups = cron.schedule("0 3 * * 0", async () => {
   try {
     logger.info("Starting inactive groups cleanup...");
@@ -54,7 +50,6 @@ const cleanupInactiveGroups = cron.schedule("0 3 * * 0", async () => {
     const sixMonthsAgo = new Date();
     sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
-    // Find groups with no activity for 6 months
     const result = await Group.updateMany(
       {
         updatedAt: { $lt: sixMonthsAgo },
@@ -73,7 +68,6 @@ const cleanupInactiveGroups = cron.schedule("0 3 * * 0", async () => {
   }
 });
 
-// Clean up old notifications (run daily at 3 AM)
 const cleanupOldNotifications = cron.schedule("0 3 * * *", async () => {
   try {
     logger.info("Starting old notifications cleanup...");
@@ -95,7 +89,6 @@ const cleanupOldNotifications = cron.schedule("0 3 * * *", async () => {
   }
 });
 
-// Clean up expired password reset tokens (run every 6 hours)
 const cleanupExpiredTokens = cron.schedule("0 */6 * * *", async () => {
   try {
     logger.info("Starting expired tokens cleanup...");
@@ -124,7 +117,6 @@ const cleanupExpiredTokens = cron.schedule("0 */6 * * *", async () => {
   }
 });
 
-// Clean up old reports (run weekly on Monday at 4 AM)
 const cleanupOldReports = cron.schedule("0 4 * * 1", async () => {
   try {
     logger.info("Starting old reports cleanup...");
@@ -133,7 +125,6 @@ const cleanupOldReports = cron.schedule("0 4 * * 1", async () => {
     const oneYearAgo = new Date();
     oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
 
-    // Archive old resolved/declined reports
     const result = await Report.deleteMany({
       createdAt: { $lt: oneYearAgo },
       status: { $in: ['resolved', 'declined'] }
@@ -147,7 +138,6 @@ const cleanupOldReports = cron.schedule("0 4 * * 1", async () => {
   }
 });
 
-// Clean up orphaned comments (run daily at 4 AM)
 const cleanupOrphanedComments = cron.schedule("0 4 * * *", async () => {
   try {
     logger.info("Starting orphaned comments cleanup...");
@@ -155,15 +145,12 @@ const cleanupOrphanedComments = cron.schedule("0 4 * * *", async () => {
     const Comment = require("../models/commentModel");
     const Post = require("../models/postModel");
 
-    // Find all comments
     const comments = await Comment.find().select('postId');
     const commentPostIds = comments.map(c => c.postId.toString());
 
-    // Find all posts
     const posts = await Post.find().select('_id');
     const postIds = new Set(posts.map(p => p._id.toString()));
 
-    // Find orphaned comments (comments for posts that don't exist)
     const orphanedCommentIds = comments
       .filter(c => !postIds.has(c.postId.toString()))
       .map(c => c._id);
@@ -180,7 +167,6 @@ const cleanupOrphanedComments = cron.schedule("0 4 * * *", async () => {
   }
 });
 
-// Clean up temporary files (run daily at 5 AM)
 const cleanupTempFiles = cron.schedule("0 5 * * *", async () => {
   try {
     logger.info("Starting temporary files cleanup...");
@@ -199,7 +185,6 @@ const cleanupTempFiles = cron.schedule("0 5 * * *", async () => {
         const filePath = path.join(tempDir, file);
         const stats = await fs.stat(filePath);
 
-        // Delete files older than 1 day
         if (now - stats.mtimeMs > oneDay) {
           await fs.unlink(filePath);
           deletedCount++;
@@ -219,21 +204,19 @@ const cleanupTempFiles = cron.schedule("0 5 * * *", async () => {
   }
 });
 
-// Clean up database sessions (run every 12 hours)
 const cleanupDatabaseSessions = cron.schedule("0 */12 * * *", async () => {
   try {
     logger.info("Starting database sessions cleanup...");
 
     const mongoose = require('mongoose');
     
-    // Kill long-running queries (optional, be careful with this)
     if (process.env.CLEANUP_LONG_QUERIES === 'true') {
       const admin = mongoose.connection.db.admin();
       const currentOps = await admin.command({ currentOp: 1 });
       
       let killedCount = 0;
       for (const op of currentOps.inprog) {
-        if (op.secs_running > 300) { // 5 minutes
+        if (op.secs_running > 300) { 
           try {
             await admin.command({ killOp: 1, op: op.opid });
             killedCount++;
@@ -252,7 +235,6 @@ const cleanupDatabaseSessions = cron.schedule("0 */12 * * *", async () => {
   }
 });
 
-// Database optimization (run weekly on Sunday at 5 AM)
 const optimizeDatabase = cron.schedule("0 5 * * 0", async () => {
   try {
     logger.info("Starting database optimization...");
@@ -268,7 +250,6 @@ const optimizeDatabase = cron.schedule("0 5 * * 0", async () => {
         });
         logger.info(`Optimized collection: ${collection.name}`);
       } catch (err) {
-        // Some collections might not support compact
         logger.debug(`Could not compact ${collection.name}:`, err.message);
       }
     }
@@ -279,7 +260,7 @@ const optimizeDatabase = cron.schedule("0 5 * * 0", async () => {
   }
 });
 
-// Start all cleanup schedulers
+
 const startCleanupSchedulers = () => {
   try {
     cleanupExpiredStories.start();
@@ -302,7 +283,6 @@ const startCleanupSchedulers = () => {
   }
 };
 
-// Stop all cleanup schedulers
 const stopCleanupSchedulers = () => {
   try {
     cleanupExpiredStories.stop();
@@ -322,7 +302,6 @@ const stopCleanupSchedulers = () => {
   }
 };
 
-// Get scheduler status
 const getSchedulerStatus = () => {
   return {
     expiredStories: cleanupExpiredStories.getStatus(),

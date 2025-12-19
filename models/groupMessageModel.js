@@ -90,17 +90,14 @@ const groupMessageSchema = new Schema(
   }
 );
 
-// Indexes
 groupMessageSchema.index({ group: 1, createdAt: -1 });
 groupMessageSchema.index({ sender: 1 });
 groupMessageSchema.index({ group: 1, isPinned: 1 });
-// Compound index for common query
 groupMessageSchema.index({ 
   group: 1, 
   isDeleted: 1, 
   createdAt: -1 
 });
-// Index for read status queries
 groupMessageSchema.index({ 
   group: 1, 
   'readBy.user': 1 

@@ -23,7 +23,6 @@ const auth = async (req, res, next) => {
       throw new AuthenticationError("User not found. Please login again.");
     }
 
-    // Check if account is blocked
     if (user.isBlocked) {
       logger.warn('Blocked user attempted access', {
         userId: user._id,
@@ -34,7 +33,6 @@ const auth = async (req, res, next) => {
       );
     }
 
-    // Check if account is verified (if verification is required)
     if (process.env.REQUIRE_EMAIL_VERIFICATION === 'true' && !user.isVerified) {
       throw new AuthorizationError("Please verify your email before accessing this resource.");
     }
@@ -54,7 +52,6 @@ const auth = async (req, res, next) => {
   }
 };
 
-// Middleware to check if user is admin
 const checkAdmin = async (req, res, next) => {
   try {
     if (!req.user) {
@@ -80,7 +77,6 @@ const checkAdmin = async (req, res, next) => {
   }
 };
 
-// Middleware to check if user is moderator or admin
 const checkModerator = async (req, res, next) => {
   try {
     if (!req.user) {
@@ -101,7 +97,6 @@ const checkModerator = async (req, res, next) => {
   }
 };
 
-// Middleware to check if user owns the resource or is admin
 const checkOwnerOrAdmin = (resourceModel, resourceIdParam = 'id') => {
   return async (req, res, next) => {
     try {
@@ -127,7 +122,6 @@ const checkOwnerOrAdmin = (resourceModel, resourceIdParam = 'id') => {
   };
 };
 
-// Middleware to check if email is verified
 const checkEmailVerified = async (req, res, next) => {
   try {
     if (!req.user.isVerified) {
@@ -141,7 +135,6 @@ const checkEmailVerified = async (req, res, next) => {
   }
 };
 
-// Optional auth - doesn't fail if no token, just sets req.user if valid token exists
 const optionalAuth = async (req, res, next) => {
   try {
     const token = req.header("Authorization");
@@ -162,12 +155,10 @@ const optionalAuth = async (req, res, next) => {
 
     next();
   } catch (err) {
-    // Silently fail for optional auth
     next();
   }
 };
 
-// Middleware to refresh token if it's about to expire
 const refreshTokenIfNeeded = async (req, res, next) => {
   try {
     const token = req.header("Authorization");
@@ -180,11 +171,9 @@ const refreshTokenIfNeeded = async (req, res, next) => {
       ignoreExpiration: true
     });
 
-    // Check if token expires in less than 5 minutes
     const expiresIn = decoded.exp - Math.floor(Date.now() / 1000);
     
     if (expiresIn < 300 && expiresIn > 0) {
-      // Generate new token
       const newToken = jwt.sign(
         { id: decoded.id },
         process.env.ACCESS_TOKEN_SECRET,

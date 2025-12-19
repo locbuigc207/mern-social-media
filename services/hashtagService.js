@@ -12,14 +12,12 @@ const extractHashtags = (text) => {
   return [...new Set(matches.map(tag => tag.slice(1).toLowerCase()))];
 };
 
-// ✅ FIXED: Use bulkWrite to reduce database queries
 const processHashtags = async (postId, content) => {
   try {
     const hashtags = extractHashtags(content);
     
     if (hashtags.length === 0) return [];
 
-    // ✅ Use bulkWrite for efficiency (1 query instead of 2N queries)
     const operations = hashtags.map(tagName => ({
       updateOne: {
         filter: { name: tagName },
@@ -34,7 +32,6 @@ const processHashtags = async (postId, content) => {
 
     await Hashtags.bulkWrite(operations);
 
-    // ✅ Fetch updated hashtags in single query
     const processedTags = await Hashtags.find({ 
       name: { $in: hashtags } 
     });
@@ -46,14 +43,12 @@ const processHashtags = async (postId, content) => {
   }
 };
 
-// ✅ FIXED: Use bulkWrite for removal
 const removePostFromHashtags = async (postId, content) => {
   try {
     const hashtags = extractHashtags(content);
     
     if (hashtags.length === 0) return;
 
-    // ✅ First, update all hashtags
     await Hashtags.updateMany(
       { name: { $in: hashtags } },
       {
@@ -62,7 +57,6 @@ const removePostFromHashtags = async (postId, content) => {
       }
     );
 
-    // ✅ Then delete hashtags with no posts
     await Hashtags.deleteMany({
       name: { $in: hashtags },
       posts: { $size: 0 }
@@ -131,7 +125,6 @@ const getTrendingHashtags = async (limit = 20) => {
 
 const searchHashtags = async (query, limit = 10) => {
   try {
-    // ✅ Sanitize query
     const sanitizedQuery = query.replace(/[$.]/g, '').trim();
     
     const hashtags = await Hashtags.find({

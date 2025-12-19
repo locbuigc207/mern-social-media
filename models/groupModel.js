@@ -94,7 +94,6 @@ const groupSchema = new Schema(
   }
 );
 
-// Indexes
 groupSchema.index({ members: 1 });
 groupSchema.index({ admin: 1 });
 groupSchema.index({ "members.user": 1 });

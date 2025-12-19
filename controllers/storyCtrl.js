@@ -129,15 +129,13 @@ const storyCtrl = {
     });
   }),
 
-  // ✅ FIXED: Use atomic MongoDB operation to prevent race condition
   viewStory: asyncHandler(async (req, res) => {
     const { storyId } = req.params;
 
-    // ✅ Atomic operation: Only update if user hasn't viewed yet
     const story = await Stories.findOneAndUpdate(
       {
         _id: storyId,
-        'views.user': { $ne: req.user._id }  // Only if not already viewed
+        'views.user': { $ne: req.user._id }  
       },
       {
         $push: {
@@ -151,21 +149,18 @@ const storyCtrl = {
     );
 
     if (!story) {
-      // Either story doesn't exist OR already viewed
       const existingStory = await Stories.findById(storyId);
       
       if (!existingStory) {
         throw new NotFoundError('Story');
       }
 
-      // Story exists but already viewed
       return res.json({
         msg: "Story already viewed",
         viewsCount: existingStory.views.length,
       });
     }
 
-    // Successfully added view
     res.json({
       msg: "Story viewed",
       viewsCount: story.views.length,

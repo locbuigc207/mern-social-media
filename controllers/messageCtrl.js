@@ -4,6 +4,7 @@ const Users = require("../models/userModel");
 const logger = require("../utils/logger");
 const { asyncHandler } = require("../middleware/errorHandler");
 const { NotFoundError, ValidationError, AuthorizationError } = require("../utils/AppError");
+const APIfeatures = require("../utils/APIfeatures");
 
 const messageCtrl = {
   createMessage: asyncHandler(async (req, res) => {
@@ -114,7 +115,6 @@ const messageCtrl = {
           { sender: req.user._id, recipient: req.params.id },
           { sender: req.params.id, recipient: req.user._id },
         ],
-        // ✅ FIXED: Use correct field name
         deletedBy: { $ne: req.user._id }
       }),
       req.query
@@ -130,7 +130,6 @@ const messageCtrl = {
     });
   }),
 
-  // ✅ FIXED: Correct field name and logic
   deleteMessage: asyncHandler(async (req, res) => {
     const message = await Messages.findById(req.params.messageId);
 
@@ -138,7 +137,6 @@ const messageCtrl = {
       throw new NotFoundError("Message");
     }
 
-    // ✅ Check if user is part of conversation
     if (
       message.sender.toString() !== req.user._id.toString() &&
       message.recipient.toString() !== req.user._id.toString()
@@ -146,12 +144,10 @@ const messageCtrl = {
       throw new AuthorizationError("You can only delete messages in your conversations.");
     }
 
-    // ✅ FIXED: Use correct field name 'deletedBy'
     if (!message.deletedBy.includes(req.user._id)) {
       message.deletedBy.push(req.user._id);
     }
 
-    // ✅ If both users deleted, permanently delete
     const bothParticipants = [
       message.sender.toString(), 
       message.recipient.toString()
@@ -189,7 +185,6 @@ const messageCtrl = {
     });
   }),
 
-  // ✅ FIXED: Correct field name
   deleteConversation: asyncHandler(async (req, res) => {
     const conversation = await Conversations.findOne({
       recipients: { $all: [req.user._id, req.params.userId] }
@@ -199,7 +194,6 @@ const messageCtrl = {
       throw new NotFoundError("Conversation");
     }
 
-    // ✅ FIXED: Use correct field name
     await Messages.updateMany(
       {
         conversation: conversation._id,
@@ -210,7 +204,6 @@ const messageCtrl = {
       }
     );
 
-    // ✅ Check if all messages are deleted by both users
     const allMessagesDeleted = await Messages.countDocuments({
       conversation: conversation._id,
       $expr: { $lt: [{ $size: "$deletedBy" }, 2] }
@@ -286,7 +279,6 @@ const messageCtrl = {
         sender: userId,
         recipient: req.user._id,
         isRead: false,
-        // ✅ FIXED: Use correct field name
         deletedBy: { $ne: req.user._id }
       },
       {
@@ -313,7 +305,6 @@ const messageCtrl = {
     const count = await Messages.countDocuments({
       recipient: req.user._id,
       isRead: false,
-      // ✅ FIXED: Use correct field name
       deletedBy: { $ne: req.user._id }
     });
 
@@ -329,7 +320,6 @@ const messageCtrl = {
       sender: userId,
       recipient: req.user._id,
       isRead: false,
-      // ✅ FIXED: Use correct field name
       deletedBy: { $ne: req.user._id }
     });
 
@@ -349,7 +339,6 @@ const messageCtrl = {
       throw new ValidationError("Search query must be at least 2 characters.");
     }
 
-    // ✅ Sanitize query
     const sanitizedQuery = query.trim().replace(/[$.]/g, '');
 
     const searchQuery = {
@@ -358,7 +347,6 @@ const messageCtrl = {
         { recipient: req.user._id }
       ],
       text: { $regex: sanitizedQuery, $options: 'i' },
-      // ✅ FIXED: Use correct field name
       deletedBy: { $ne: req.user._id }
     };
 
@@ -465,20 +453,5 @@ const messageCtrl = {
     });
   })
 };
-
-class APIfeatures {
-  constructor(query, queryString) {
-    this.query = query;
-    this.queryString = queryString;
-  }
-
-  paginating() {
-    const page = this.queryString.page * 1 || 1;
-    const limit = this.queryString.limit * 1 || 20;
-    const skip = (page - 1) * limit;
-    this.query = this.query.skip(skip).limit(limit);
-    return this;
-  }
-}
 
 module.exports = messageCtrl;

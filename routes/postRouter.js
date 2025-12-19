@@ -5,15 +5,14 @@ const { uploadMultiple } = require("../middleware/upload");
 const { 
   createPostLimiter, 
   generalLimiter,
-  reportLimiter,      // ✅ NEW
-  interactionLimiter  // ✅ NEW
+  reportLimiter,      
+  interactionLimiter  
 } = require("../middleware/rateLimiter");
 const { validate } = require('../middleware/validate');
 const postSchemas = require('../schemas/postSchema');
 const validateObjectId = require('../middleware/validateObjectId');
 const { validatePagination } = require("../middleware/validation");
 
-// Create post
 router.post("/posts", 
   auth, 
   createPostLimiter, 
@@ -22,7 +21,6 @@ router.post("/posts",
   postCtrl.createPost
 );
 
-// Get posts feed
 router.get("/posts", 
   auth, 
   validatePagination, 
@@ -30,7 +28,6 @@ router.get("/posts",
   postCtrl.getPosts
 );
 
-// Update post
 router.patch("/post/:id", 
   auth, 
   validateObjectId('id'), 
@@ -39,7 +36,6 @@ router.patch("/post/:id",
   postCtrl.updatePost
 );
 
-// Get single post
 router.get("/post/:id", 
   auth, 
   validateObjectId('id'), 
@@ -47,14 +43,12 @@ router.get("/post/:id",
   postCtrl.getPost
 );
 
-// Delete post
 router.delete("/post/:id", 
   auth, 
   validateObjectId('id'), 
   postCtrl.deletePost
 );
 
-// === DRAFTS ===
 router.get("/drafts", 
   auth, 
   validatePagination, 
@@ -88,7 +82,6 @@ router.post("/draft/:id/publish",
   postCtrl.publishDraft
 );
 
-// === SCHEDULED POSTS ===
 router.get("/scheduled-posts", 
   auth, 
   validatePagination, 
@@ -116,29 +109,25 @@ router.post("/scheduled-post/:id/cancel",
   postCtrl.cancelScheduledPost
 );
 
-// === INTERACTIONS ===
 
-// ✅ FIXED: Add rate limiter
 router.patch("/post/:id/like", 
   auth, 
   validateObjectId('id'), 
-  interactionLimiter,  // ✅ NEW
+  interactionLimiter,  
   postCtrl.likePost
 );
 
-// ✅ FIXED: Add rate limiter
 router.patch("/post/:id/unlike", 
   auth, 
   validateObjectId('id'), 
-  interactionLimiter,  // ✅ NEW
+  interactionLimiter,  
   postCtrl.unLikePost
 );
 
-// ✅ FIXED: Add rate limiter
 router.patch("/post/:id/report", 
   auth, 
   validateObjectId('id'), 
-  reportLimiter,  // ✅ NEW - Prevent spam reporting
+  reportLimiter, 
   validate(postSchemas.report), 
   postCtrl.reportPost
 );
@@ -167,7 +156,6 @@ router.post("/unhide-all-posts",
   postCtrl.unhideAllPosts
 );
 
-// === USER POSTS & DISCOVERY ===
 router.get("/user_posts/:id", 
   auth, 
   validateObjectId('id'), 
@@ -182,7 +170,6 @@ router.get("/post_discover",
   postCtrl.getPostDiscover
 );
 
-// === SAVED POSTS ===
 router.patch("/savePost/:id", 
   auth, 
   validateObjectId('id'), 

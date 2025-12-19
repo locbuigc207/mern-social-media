@@ -4,13 +4,11 @@ const userCtrl = require('../controllers/userCtrl');
 const { validate } = require('../middleware/validate');
 const userSchemas = require('../schemas/userSchema');
 const validateObjectId = require('../middleware/validateObjectId');
-// ✅ FIXED: Import follow limiter
 const { followLimiter, searchLimiter } = require('../middleware/rateLimiter');
 
-// ✅ FIXED: Add rate limiter for search
 router.get('/search', 
   auth,
-  searchLimiter,  // ✅ NEW
+  searchLimiter,  
   userCtrl.searchUser
 );
 
@@ -60,19 +58,17 @@ router.get("/user/:id/check-blocked",
   userCtrl.checkBlocked
 );
 
-// ✅ FIXED: Add rate limiter for follow
 router.patch("/user/:id/follow", 
   auth, 
   validateObjectId('id'),
-  followLimiter,  // ✅ NEW - Prevent automated following
+  followLimiter,  
   userCtrl.follow
 );
 
-// ✅ FIXED: Add rate limiter for unfollow
 router.patch("/user/:id/unfollow", 
   auth, 
   validateObjectId('id'),
-  followLimiter,  // ✅ NEW
+  followLimiter,  
   userCtrl.unfollow
 );
 

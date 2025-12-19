@@ -17,7 +17,6 @@ const groupCtrl = {
       throw new ValidationError("At least 2 members are required.");
     }
 
-    // Validate all members exist
     const validMembers = await Users.find({
       _id: { $in: members }
     }).select('_id');
@@ -26,7 +25,6 @@ const groupCtrl = {
       throw new ValidationError("Some user IDs are invalid.");
     }
 
-    // Check for blocked users
     const currentUser = await Users.findById(req.user._id);
     const blockedMembers = members.filter(memberId => 
       currentUser.blockedUsers.includes(memberId) ||
@@ -37,7 +35,6 @@ const groupCtrl = {
       throw new AuthorizationError("Cannot add blocked users to group.");
     }
 
-    // Add creator as admin
     const groupMembers = [
       {
         user: req.user._id,
@@ -46,7 +43,6 @@ const groupCtrl = {
       },
     ];
 
-    // Add other members
     members.forEach((memberId) => {
       if (memberId !== req.user._id.toString()) {
         groupMembers.push({
@@ -105,7 +101,6 @@ const groupCtrl = {
       throw new NotFoundError("Group");
     }
 
-    // Check if user is member
     const isMember = group.members.some(
       (m) => m.user._id.toString() === req.user._id.toString()
     );
@@ -117,7 +112,6 @@ const groupCtrl = {
     res.json({ group });
   }),
 
-  // ✅ Fixed sendGroupMessage with transaction
   sendGroupMessage: asyncHandler(async (req, res) => {
     const { groupId } = req.params;
     const { text, media, replyTo, mentions } = req.body;
@@ -126,7 +120,6 @@ const groupCtrl = {
       throw new ValidationError("Message cannot be empty.");
     }
 
-    // ✅ Sử dụng transaction
     const session = await mongoose.startSession();
     session.startTransaction();
 
@@ -151,7 +144,6 @@ const groupCtrl = {
         throw new AuthorizationError("Only admins can post in this group.");
       }
 
-      // ✅ Tạo message
       const newMessage = new GroupMessages({
         group: groupId,
         sender: req.user._id,
@@ -163,7 +155,6 @@ const groupCtrl = {
 
       await newMessage.save({ session });
 
-      // ✅ Update group lastMessage
       group.lastMessage = {
         sender: req.user._id,
         text: text?.trim() || (media && media.length > 0 ? "Media" : ""),
@@ -204,7 +195,6 @@ const groupCtrl = {
       throw new NotFoundError("Group");
     }
 
-    // Check if user is member
     const isMember = group.members.some(
       (m) => m.user.toString() === req.user._id.toString()
     );
@@ -254,7 +244,6 @@ const groupCtrl = {
       throw new NotFoundError("Group");
     }
 
-    // Check permission
     const member = group.members.find(
       (m) => m.user.toString() === req.user._id.toString()
     );
@@ -266,7 +255,6 @@ const groupCtrl = {
       throw new AuthorizationError("Only admins can add members.");
     }
 
-    // Add new members
     const newMembers = [];
     for (const memberId of members) {
       const exists = group.members.some(
@@ -304,7 +292,6 @@ const groupCtrl = {
       throw new NotFoundError("Group");
     }
 
-    // Check if user is admin
     const isAdmin = group.admin.some(
       (a) => a.toString() === req.user._id.toString()
     );
@@ -313,7 +300,6 @@ const groupCtrl = {
       throw new AuthorizationError("Only admins can remove members.");
     }
 
-    // Cannot remove other admins
     const memberToRemove = group.members.find(
       (m) => m.user.toString() === memberId
     );
@@ -371,7 +357,6 @@ const groupCtrl = {
       throw new NotFoundError("Group");
     }
 
-    // Check permission
     const member = group.members.find(
       (m) => m.user.toString() === req.user._id.toString()
     );
@@ -406,16 +391,13 @@ const groupCtrl = {
       throw new NotFoundError("Message");
     }
 
-    // Check if already reacted
     const existingReaction = message.reactions.findIndex(
       (r) => r.user.toString() === req.user._id.toString()
     );
 
     if (existingReaction !== -1) {
-      // Update existing reaction
       message.reactions[existingReaction].emoji = emoji;
     } else {
-      // Add new reaction
       message.reactions.push({
         user: req.user._id,
         emoji,

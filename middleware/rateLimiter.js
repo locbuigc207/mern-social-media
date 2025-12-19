@@ -4,7 +4,6 @@ const redis = require("redis");
 const logger = require("../utils/logger");
 const { RateLimitError } = require("../utils/AppError");
 
-// Redis client for rate limiting
 let redisClient = null;
 
 const initializeRedis = async () => {
@@ -39,10 +38,8 @@ const initializeRedis = async () => {
   }
 };
 
-// Initialize Redis connection
 initializeRedis();
 
-// Default rate limit handler
 const defaultHandler = (req, res) => {
   logger.warn('Rate limit exceeded', {
     ip: req.ip,
@@ -55,17 +52,15 @@ const defaultHandler = (req, res) => {
   );
 };
 
-// Create rate limiter with optional Redis store
 const createRateLimiter = (options) => {
   const config = {
-    windowMs: options.windowMs || 15 * 60 * 1000, // 15 minutes
+    windowMs: options.windowMs || 15 * 60 * 1000, 
     max: options.max || 100,
     message: options.message || 'Too many requests, please try again later.',
     standardHeaders: true,
     legacyHeaders: false,
     handler: options.handler || defaultHandler,
     skip: options.skip || ((req) => {
-      // Skip rate limiting for admins in development
       if (process.env.NODE_ENV === 'development' && req.user?.role === 'admin') {
         return true;
       }
@@ -76,7 +71,6 @@ const createRateLimiter = (options) => {
     })
   };
 
-  // Use Redis store if available
   if (redisClient && redisClient.isOpen) {
     config.store = new RedisStore({
       client: redisClient,
@@ -87,122 +81,109 @@ const createRateLimiter = (options) => {
   return rateLimit(config);
 };
 
-// Auth endpoints rate limiter (stricter)
 const authLimiter = createRateLimiter({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // 5 requests per 15 minutes
+  windowMs: 15 * 60 * 1000, 
+  max: 5, 
   message: 'Too many login attempts, please try again later.',
   prefix: 'rl:auth:',
-  skipSuccessfulRequests: true, // Don't count successful requests
+  skipSuccessfulRequests: true, 
 });
 
-// Registration rate limiter
 const registerLimiter = createRateLimiter({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 3, // 3 accounts per hour per IP
+  windowMs: 60 * 60 * 1000, 
+  max: 3, 
   message: 'Too many accounts created, please try again later.',
   prefix: 'rl:register:',
-  keyGenerator: (req) => req.ip, // Always use IP for registration
+  keyGenerator: (req) => req.ip, 
 });
 
-// Password reset rate limiter
 const passwordResetLimiter = createRateLimiter({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 3, // 3 reset attempts per hour
+  windowMs: 60 * 60 * 1000, 
+  max: 3, 
   message: 'Too many password reset attempts, please try again later.',
   prefix: 'rl:password-reset:',
 });
 
-// Post creation rate limiter
 const createPostLimiter = createRateLimiter({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 30, // 30 posts per hour
+  windowMs: 60 * 60 * 1000, 
+  max: 30, 
   message: 'You are creating posts too quickly, please slow down.',
   prefix: 'rl:create-post:',
 });
 
-// Comment rate limiter
 const commentLimiter = createRateLimiter({
-  windowMs: 60 * 1000, // 1 minute
-  max: 10, // 10 comments per minute
+  windowMs: 60 * 1000, 
+  max: 10, 
   message: 'You are commenting too quickly, please slow down.',
   prefix: 'rl:comment:',
 });
 
-// Message rate limiter
 const messageLimiter = createRateLimiter({
-  windowMs: 60 * 1000, // 1 minute
-  max: 30, // 30 messages per minute
+  windowMs: 60 * 1000, 
+  max: 30,
   message: 'You are sending messages too quickly, please slow down.',
   prefix: 'rl:message:',
 });
 
-// Like/Unlike rate limiter
 const interactionLimiter = createRateLimiter({
-  windowMs: 60 * 1000, // 1 minute
-  max: 60, // 60 interactions per minute
+  windowMs: 60 * 1000, 
+  max: 60, 
   message: 'You are interacting too quickly, please slow down.',
   prefix: 'rl:interaction:',
 });
 
-// Follow/Unfollow rate limiter
 const followLimiter = createRateLimiter({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 100, // 100 follows per hour
+  windowMs: 60 * 60 * 1000, 
+  max: 100, 
   message: 'You are following/unfollowing too quickly, please slow down.',
   prefix: 'rl:follow:',
 });
 
-// Search rate limiter
 const searchLimiter = createRateLimiter({
-  windowMs: 60 * 1000, // 1 minute
-  max: 30, // 30 searches per minute
+  windowMs: 60 * 1000, 
+  max: 30, 
   message: 'Too many search requests, please slow down.',
   prefix: 'rl:search:',
 });
 
-// File upload rate limiter
+
 const uploadLimiter = createRateLimiter({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 50, // 50 uploads per hour
+  windowMs: 60 * 60 * 1000, 
+  max: 50, 
   message: 'Too many file uploads, please try again later.',
   prefix: 'rl:upload:',
 });
 
-// General API rate limiter
 const generalLimiter = createRateLimiter({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 1000, // 1000 requests per 15 minutes
+  windowMs: 15 * 60 * 1000, 
+  max: 1000, 
   message: 'Too many requests, please try again later.',
   prefix: 'rl:general:',
 });
 
-// Report rate limiter
 const reportLimiter = createRateLimiter({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 10, // 10 reports per hour
+  windowMs: 60 * 60 * 1000, 
+  max: 10, 
   message: 'Too many reports, please try again later.',
   prefix: 'rl:report:',
 });
 
-// Story creation rate limiter
 const storyLimiter = createRateLimiter({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 30, // 30 stories per hour
+  windowMs: 60 * 60 * 1000, 
+
+  max: 30, 
   message: 'You are creating stories too quickly, please slow down.',
   prefix: 'rl:story:',
 });
 
-// Admin actions rate limiter (looser)
 const adminLimiter = createRateLimiter({
-  windowMs: 60 * 1000, // 1 minute
-  max: 100, // 100 admin actions per minute
+  windowMs: 60 * 1000, 
+  max: 100, 
   message: 'Too many admin actions, please slow down.',
   prefix: 'rl:admin:',
   skip: (req) => process.env.NODE_ENV === 'development',
 });
 
-// Dynamic rate limiter based on user role
 const dynamicRateLimiter = (limits) => {
   return (req, res, next) => {
     const userRole = req.user?.role || 'guest';
@@ -218,7 +199,6 @@ const dynamicRateLimiter = (limits) => {
   };
 };
 
-// Cleanup function for graceful shutdown
 const closeRateLimiter = async () => {
   if (redisClient && redisClient.isOpen) {
     try {
@@ -230,7 +210,6 @@ const closeRateLimiter = async () => {
   }
 };
 
-// Get rate limit info for user
 const getRateLimitInfo = async (userId, prefix = 'rl:') => {
   if (!redisClient || !redisClient.isOpen) {
     return null;
@@ -251,7 +230,6 @@ const getRateLimitInfo = async (userId, prefix = 'rl:') => {
   }
 };
 
-// Reset rate limit for user (admin function)
 const resetRateLimit = async (userId, prefix = 'rl:') => {
   if (!redisClient || !redisClient.isOpen) {
     return false;

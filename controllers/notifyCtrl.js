@@ -171,7 +171,6 @@ const notifyCtrl = {
       throw new NotFoundError("Notification");
     }
 
-    // Check if user is recipient
     if (!notify.recipients.includes(req.user._id)) {
       return res.status(403).json({ msg: "You cannot delete this notification." });
     }
@@ -194,12 +193,10 @@ const notifyCtrl = {
       throw new NotFoundError("Notification");
     }
 
-    // Check if user is recipient
     if (!notify.recipients.includes(req.user._id)) {
       return res.status(403).json({ msg: "You cannot view this notification." });
     }
 
-    // Mark as read
     if (!notify.isRead) {
       notify.isRead = true;
       await notify.save();

@@ -6,7 +6,6 @@ const commentSchemas = require("../schemas/commentSchema");
 const validateObjectId = require("../middleware/validateObjectId");
 const { rateLimitByUser } = require("../middleware/validation");
 
-// Create comment
 commentRouter.post('/comment', 
   commentAuth, 
   rateLimitByUser(30, 60 * 1000), 
@@ -14,7 +13,6 @@ commentRouter.post('/comment',
   commentCtrl.createComment
 );
 
-// Update comment
 commentRouter.patch('/comment/:id', 
   commentAuth, 
   validateObjectId('id'), 
@@ -22,28 +20,24 @@ commentRouter.patch('/comment/:id',
   commentCtrl.updateComment
 );
 
-// Delete comment
 commentRouter.delete("/comment/:id", 
   commentAuth, 
   validateObjectId('id'), 
   commentCtrl.deleteComment
 );
 
-// Like comment
 commentRouter.patch("/comment/:id/like", 
   commentAuth, 
   validateObjectId('id'), 
   commentCtrl.likeComment
 );
 
-// Unlike comment
 commentRouter.patch("/comment/:id/unlike", 
   commentAuth, 
   validateObjectId('id'), 
   commentCtrl.unLikeComment
 );
 
-// Report comment
 commentRouter.patch("/comment/:id/report", 
   commentAuth, 
   validateObjectId('id'), 
@@ -52,7 +46,6 @@ commentRouter.patch("/comment/:id/report",
   commentCtrl.reportComment
 );
 
-// Hide comment
 commentRouter.patch("/comment/:id/hide", 
   commentAuth, 
   validateObjectId('id'), 

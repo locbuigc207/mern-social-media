@@ -98,7 +98,7 @@ const reportSchema = new Schema(
 );
 
 reportSchema.index({ reportType: 1, status: 1, createdAt: -1 });
-reportSchema.index({ targetId: 1, reportedBy: 1 }, { unique: true }); // Prevent duplicate reports
+reportSchema.index({ targetId: 1, reportedBy: 1 }, { unique: true }); 
 reportSchema.index({ status: 1, priority: -1, createdAt: -1 });
 reportSchema.index({ reviewedBy: 1, status: 1 });
 

@@ -110,7 +110,6 @@ const userSchema = new mongoose.Schema(
       default: 0,
     },
     lastResetAttempt: Date,
-    // ✅ NEW FIELD: Store invalidated reset tokens
     previousResetTokens: [
       {
         token: String,
@@ -162,14 +161,12 @@ const userSchema = new mongoose.Schema(
   }
 );
 
-// ✅ Indexes for better query performance
 userSchema.index({ username: 1 });
 userSchema.index({ email: 1 });
 userSchema.index({ role: 1, isBlocked: 1 });
 userSchema.index({ followers: 1 });
 userSchema.index({ following: 1 });
 userSchema.index({ createdAt: -1 });
-// ✅ NEW: Index for blocked users queries
 userSchema.index({ blockedUsers: 1 });
 userSchema.index({ blockedBy: 1 });
 

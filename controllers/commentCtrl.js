@@ -7,7 +7,6 @@ const { NotFoundError, ValidationError } = require("../utils/AppError");
 const { REPORT_REASONS, REPORT_PRIORITY } = require("../constants");
 
 const commentCtrl = {
-  // ✅ Fixed createComment - Save comment first, then update post
   createComment: asyncHandler(async (req, res) => {
     const { postId, content, tag, reply, postUserId } = req.body;
 
@@ -32,10 +31,8 @@ const commentCtrl = {
       postId,
     });
 
-    // ✅ Save comment FIRST
     await newComment.save();
 
-    // ✅ Then update post
     await Posts.findOneAndUpdate(
       { _id: postId },
       {

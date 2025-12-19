@@ -5,9 +5,7 @@ const { asyncHandler } = require("../middleware/errorHandler");
 const { ValidationError, NotFoundError, ConflictError } = require("../utils/AppError");
 
 const userCtrl = {
-  // ✅ FIXED: Add NoSQL injection protection
   searchUser: asyncHandler(async (req, res) => {
-    // ✅ Sanitize input to prevent NoSQL injection
     const searchQuery = req.query.username
       ? req.query.username.replace(/[$.]/g, '').trim()
       : '';
@@ -138,7 +136,7 @@ const userCtrl = {
     res.json({ privacySettings: user.privacySettings });
   }),
 
-  // ✅ FIXED: Properly update both users when blocking
+
   blockUser: asyncHandler(async (req, res) => {
     const { id } = req.params;
 
@@ -156,29 +154,25 @@ const userCtrl = {
       throw new ConflictError("User is already blocked.");
     }
 
-    // ✅ FIXED: Update current user (blocker)
     await Users.findByIdAndUpdate(req.user._id, {
       $addToSet: { blockedUsers: id },
       $pull: { 
-        following: id  // Remove from following
+        following: id  
       },
     });
 
-    // ✅ FIXED: Update target user (blocked)
     await Users.findByIdAndUpdate(id, {
       $addToSet: { blockedBy: req.user._id },
       $pull: { 
-        followers: req.user._id,  // Remove blocker from their followers
-        following: req.user._id   // Remove blocker from their following
+        followers: req.user._id,  
+        following: req.user._id   
       },
     });
 
-    // ✅ Delete conversations between blocked users
     await Conversations.deleteMany({
       recipients: { $all: [req.user._id, id] }
     });
 
-    // ✅ Soft delete messages between blocked users
     await Messages.updateMany(
       {
         $or: [
