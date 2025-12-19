@@ -2,31 +2,60 @@ const router = require('express').Router();
 const auth = require('../middleware/auth');
 const notifyCtrl = require('../controllers/notifyCtrl');
 const validateObjectId = require('../middleware/validateObjectId');
+const { validatePagination } = require('../middleware/validation');
+const { interactionLimiter } = require('../middleware/rateLimiter');
+
+router.use(auth);
 
 router.post('/notify', 
-  auth, 
+  interactionLimiter,
   notifyCtrl.createNotify
 );
 
-router.delete('/notify/:id', 
-  auth, 
-  validateObjectId('id'), 
-  notifyCtrl.removeNotify
-);
-
 router.get("/notifies", 
-  auth, 
+  validatePagination,
   notifyCtrl.getNotifies
 );
 
-router.patch("/isReadNotify/:id", 
-  auth, 
+router.get("/notifies/unread/count",
+  notifyCtrl.getUnreadCount
+);
+
+router.get("/notifies/search",
+  validatePagination,
+  notifyCtrl.searchNotifies
+);
+
+router.get("/notifies/type/:type",
+  validatePagination,
+  notifyCtrl.getNotifiesByType
+);
+
+router.get("/notify/:id",
+  validateObjectId('id'),
+  notifyCtrl.getNotifyById
+);
+
+router.patch("/notify/:id/read", 
   validateObjectId('id'), 
   notifyCtrl.isReadNotify
 );
 
-router.delete("/deleteAllNotify", 
-  auth, 
+router.patch("/notifies/read-all",
+  notifyCtrl.markAllAsRead
+);
+
+router.delete("/notify/:id",
+  validateObjectId('id'),
+  notifyCtrl.deleteNotify
+);
+
+router.delete('/notify/:id', 
+  validateObjectId('id'), 
+  notifyCtrl.removeNotify
+);
+
+router.delete("/notifies",
   notifyCtrl.deleteAllNotifies
 );
 

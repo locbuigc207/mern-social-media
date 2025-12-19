@@ -1,7 +1,6 @@
 const mongoose = require("mongoose");
 const { ValidationError } = require("../utils/AppError");
 
-// Validate MongoDB ObjectId
 const validateObjectId = (paramName) => {
   return (req, res, next) => {
     const id = req.params[paramName];
@@ -14,7 +13,6 @@ const validateObjectId = (paramName) => {
   };
 };
 
-// Validate multiple ObjectIds
 const validateObjectIds = (...paramNames) => {
   return (req, res, next) => {
     for (const paramName of paramNames) {
@@ -29,7 +27,6 @@ const validateObjectIds = (...paramNames) => {
   };
 };
 
-// Validate pagination parameters
 const validatePagination = (req, res, next) => {
   const page = parseInt(req.query.page);
   const limit = parseInt(req.query.limit);
@@ -42,34 +39,27 @@ const validatePagination = (req, res, next) => {
     throw new ValidationError("Limit must be between 1 and 100");
   }
 
-  // Set defaults
   req.query.page = page || 1;
   req.query.limit = limit || 20;
 
   next();
 };
 
-// Validate email format
 const validateEmail = (email) => {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   return emailRegex.test(email);
 };
 
-// Validate password strength
 const validatePassword = (password) => {
-  // At least 8 chars, 1 uppercase, 1 lowercase, 1 number, 1 special char
   const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
   return passwordRegex.test(password);
 };
 
-// Validate username
 const validateUsername = (username) => {
-  // 3-25 chars, alphanumeric and underscore only
   const usernameRegex = /^[a-zA-Z0-9_]{3,25}$/;
   return usernameRegex.test(username);
 };
 
-// Validate URL
 const validateUrl = (url) => {
   try {
     new URL(url);
@@ -79,7 +69,6 @@ const validateUrl = (url) => {
   }
 };
 
-// Validate date range
 const validateDateRange = (req, res, next) => {
   const { startDate, endDate } = req.query;
 
@@ -99,7 +88,6 @@ const validateDateRange = (req, res, next) => {
       throw new ValidationError("Start date must be before end date");
     }
 
-    // Max range 1 year
     const diffDays = (end - start) / (1000 * 60 * 60 * 24);
     if (diffDays > 365) {
       throw new ValidationError("Date range cannot exceed 1 year");
@@ -109,7 +97,6 @@ const validateDateRange = (req, res, next) => {
   next();
 };
 
-// Validate file upload
 const validateFileUpload = (maxSize = 10 * 1024 * 1024) => {
   return (req, res, next) => {
     if (!req.files && !req.file) {
@@ -125,7 +112,6 @@ const validateFileUpload = (maxSize = 10 * 1024 * 1024) => {
         );
       }
 
-      // Validate file type
       const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'video/mp4'];
       if (!allowedTypes.includes(file.mimetype)) {
         throw new ValidationError(
@@ -138,7 +124,6 @@ const validateFileUpload = (maxSize = 10 * 1024 * 1024) => {
   };
 };
 
-// Validate search query
 const validateSearch = (req, res, next) => {
   const { query } = req.query;
 
@@ -150,13 +135,11 @@ const validateSearch = (req, res, next) => {
     throw new ValidationError("Search query too long (max 100 characters)");
   }
 
-  // Sanitize query
   req.query.query = query.trim();
 
   next();
 };
 
-// Validate content length
 const validateContentLength = (field, minLength, maxLength) => {
   return (req, res, next) => {
     const content = req.body[field];
@@ -183,7 +166,6 @@ const validateContentLength = (field, minLength, maxLength) => {
   };
 };
 
-// Validate array length
 const validateArrayLength = (field, minLength, maxLength) => {
   return (req, res, next) => {
     const array = req.body[field];
@@ -208,7 +190,6 @@ const validateArrayLength = (field, minLength, maxLength) => {
   };
 };
 
-// Sanitize input
 const sanitizeInput = (req, res, next) => {
   const sanitize = (obj) => {
     if (typeof obj === 'string') {
@@ -237,7 +218,6 @@ const sanitizeInput = (req, res, next) => {
   next();
 };
 
-// Rate limit by user
 const rateLimitByUser = (maxRequests, windowMs) => {
   const userRequests = new Map();
 
@@ -255,7 +235,6 @@ const rateLimitByUser = (maxRequests, windowMs) => {
 
     const requests = userRequests.get(userId);
     
-    // Remove old requests outside window
     const validRequests = requests.filter(time => now - time < windowMs);
     
     if (validRequests.length >= maxRequests) {
@@ -271,7 +250,6 @@ const rateLimitByUser = (maxRequests, windowMs) => {
   };
 };
 
-// Validate enum value
 const validateEnum = (field, allowedValues) => {
   return (req, res, next) => {
     const value = req.body[field] || req.query[field];
@@ -290,7 +268,6 @@ const validateEnum = (field, allowedValues) => {
   };
 };
 
-// Validate required fields
 const validateRequiredFields = (...fields) => {
   return (req, res, next) => {
     const missing = [];
@@ -311,7 +288,6 @@ const validateRequiredFields = (...fields) => {
   };
 };
 
-// Validate numeric range
 const validateNumericRange = (field, min, max) => {
   return (req, res, next) => {
     const value = parseInt(req.body[field] || req.query[field]);
@@ -336,7 +312,6 @@ const validateNumericRange = (field, min, max) => {
   };
 };
 
-// Validate coordinates
 const validateCoordinates = (req, res, next) => {
   const { latitude, longitude } = req.body;
 
@@ -358,24 +333,20 @@ const validateCoordinates = (req, res, next) => {
   next();
 };
 
-// Validate phone number
 const validatePhoneNumber = (phone) => {
   const phoneRegex = /^[+]?[(]?[0-9]{1,4}[)]?[-\s.]?[(]?[0-9]{1,4}[)]?[-\s.]?[0-9]{1,9}$/;
   return phoneRegex.test(phone);
 };
 
-// Validate hex color
 const validateHexColor = (color) => {
   const hexRegex = /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/;
   return hexRegex.test(color);
 };
 
-// Check if array contains duplicates
 const hasDuplicates = (array) => {
   return new Set(array).size !== array.length;
 };
 
-// Validate no duplicate values in array field
 const validateNoDuplicates = (field) => {
   return (req, res, next) => {
     const array = req.body[field];

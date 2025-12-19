@@ -2,56 +2,68 @@ const router = require("express").Router();
 const auth = require("../middleware/auth");
 const messageCtrl = require("../controllers/messageCtrl");
 const validateObjectId = require("../middleware/validateObjectId");
+const { messageLimiter, interactionLimiter } = require("../middleware/rateLimiter");
+
+router.use(auth);
 
 router.post("/message", 
-  auth, 
+  messageLimiter,
   messageCtrl.createMessage
 );
 
 router.get("/conversations", 
-  auth, 
   messageCtrl.getConversations
 );
 
 router.get("/message/:id", 
-  auth, 
   validateObjectId('id'), 
   messageCtrl.getMessages
 );
 
 router.patch("/message/:messageId/read", 
-  auth, 
-  validateObjectId('messageId'), 
+  validateObjectId('messageId'),
+  interactionLimiter,
   messageCtrl.markAsRead
 );
 
 router.patch("/messages/:userId/read-all", 
-  auth, 
-  validateObjectId('userId'), 
+  validateObjectId('userId'),
+  interactionLimiter,
   messageCtrl.markAllAsRead
 );
 
 router.delete("/message/:messageId", 
-  auth, 
   validateObjectId('messageId'), 
   messageCtrl.deleteMessage
 );
 
 router.delete("/conversation/:userId", 
-  auth, 
   validateObjectId('userId'), 
   messageCtrl.deleteConversation
 );
 
 router.get("/messages/unread/count", 
-  auth, 
   messageCtrl.getUnreadCount
 );
 
 router.get("/messages/:userId/unread", 
-  auth, 
   validateObjectId('userId'), 
   messageCtrl.getUnreadByConversation
+);
+
+router.get("/messages/search",
+  messageCtrl.searchMessages
+);
+
+router.post("/message/:messageId/react",
+  validateObjectId('messageId'),
+  interactionLimiter,
+  messageCtrl.reactToMessage
+);
+
+router.delete("/message/:messageId/react",
+  validateObjectId('messageId'),
+  messageCtrl.removeReaction
 );
 
 module.exports = router;
