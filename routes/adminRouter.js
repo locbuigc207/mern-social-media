@@ -1,19 +1,12 @@
 const router = require("express").Router();
-const auth = require("../middleware/auth");
+const { auth, checkAdmin } = require("../middleware/auth");
 const adminCtrl = require("../controllers/adminCtrl");
 const { validate } = require("../middleware/validate");
 const Joi = require("joi");
+const validateObjectId = require("../middleware/validateObjectId");
 const { 
-  validatePagination, 
-  validateObjectId
+  validatePagination
 } = require("../middleware/validation");
-
-const checkAdmin = (req, res, next) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ msg: "Access denied. Admin only." });
-  }
-  next;
-};
 
 const blockUserSchema = Joi.object({
   reason: Joi.string().min(10).max(500).required()

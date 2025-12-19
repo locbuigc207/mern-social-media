@@ -1,5 +1,5 @@
 const router = require("express").Router();
-const auth = require("../middleware/auth");
+const auth = require("../middleware/auth").auth;
 const postCtrl = require("../controllers/postCtrl");
 const { uploadMultiple } = require("../middleware/upload");
 const { 
@@ -108,7 +108,6 @@ router.post("/scheduled-post/:id/cancel",
   validateObjectId('id'), 
   postCtrl.cancelScheduledPost
 );
-
 
 router.patch("/post/:id/like", 
   auth, 

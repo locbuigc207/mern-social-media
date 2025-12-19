@@ -1,5 +1,5 @@
 const router = require("express").Router();
-const auth = require("../middleware/auth");
+const auth = require("../middleware/auth").auth;
 const groupCtrl = require("../controllers/groupCtrl");
 const { validate } = require("../middleware/validate");
 const groupSchemas = require("../schemas/groupSchema");

@@ -27,7 +27,7 @@ const postSchema = new Schema(
     reports: [
       {
         type: mongoose.Types.ObjectId,
-        ref: "report", 
+        ref: "report",
       },
     ],
     reportCount: {
@@ -89,6 +89,9 @@ postSchema.index({ user: 1, status: 1, isDraft: 1 });
 postSchema.index({ user: 1, status: 1, isDraft: 1, createdAt: -1 });
 postSchema.index({ status: 1, createdAt: -1 });
 postSchema.index({ reportCount: -1, moderationStatus: 1 });
+
+postSchema.index({ status: 1, isDraft: 1, hiddenBy: 1, createdAt: -1 });
+postSchema.index({ user: 1, status: 1, isDraft: 1, moderationStatus: 1 });
 
 postSchema.methods.incrementReportCount = function () {
   this.reportCount += 1;

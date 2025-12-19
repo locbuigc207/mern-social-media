@@ -1,5 +1,5 @@
 const router = require("express").Router();
-const auth = require("../middleware/auth");
+const auth = require("../middleware/auth").auth;
 const storyCtrl = require("../controllers/storyCtrl");
 const { validate } = require("../middleware/validate");
 const storySchemas = require("../schemas/storySchema");
@@ -54,13 +54,12 @@ router.post("/story/:storyId/highlight",
   storyCtrl.addToHighlight
 );
 
-router.get("/stories/highlights/:userId", 
+router.get("/stories/highlights/:userId",
   auth,
   validateObjectId('userId'),
   storyCtrl.getHighlights
 );
-
-router.get("/story/:storyId/views", 
+router.get("/story/:storyId/views",
   auth,
   validateObjectId('storyId'),
   storyCtrl.getStoryViews

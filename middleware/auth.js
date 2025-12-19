@@ -58,6 +58,14 @@ const checkAdmin = async (req, res, next) => {
       throw new AuthenticationError("Authentication required.");
     }
 
+    if (req.user.isBlocked) {
+      logger.warn('Blocked admin attempted access', {
+        adminId: req.user._id,
+        username: req.user.username
+      });
+      throw new AuthorizationError("Admin account is blocked.");
+    }
+
     if (req.user.role !== 'admin') {
       logger.warn('Non-admin attempted admin access', {
         userId: req.user._id,
@@ -83,6 +91,10 @@ const checkModerator = async (req, res, next) => {
       throw new AuthenticationError("Authentication required.");
     }
 
+    if (req.user.isBlocked) {
+      throw new AuthorizationError("Your account is blocked.");
+    }
+
     if (req.user.role !== 'admin' && req.user.role !== 'moderator') {
       logger.warn('Non-moderator attempted moderator access', {
         userId: req.user._id,
@@ -104,6 +116,7 @@ const checkOwnerOrAdmin = (resourceModel, resourceIdParam = 'id') => {
       const resource = await resourceModel.findById(resourceId);
 
       if (!resource) {
+        const { NotFoundError } = require('../utils/AppError');
         throw new NotFoundError(resourceModel.modelName);
       }
 

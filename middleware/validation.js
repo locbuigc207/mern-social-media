@@ -1,18 +1,6 @@
 const mongoose = require("mongoose");
 const { ValidationError } = require("../utils/AppError");
 
-const validateObjectId = (paramName) => {
-  return (req, res, next) => {
-    const id = req.params[paramName];
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      throw new ValidationError(`Invalid ${paramName} format`);
-    }
-
-    next();
-  };
-};
-
 const validateObjectIds = (...paramNames) => {
   return (req, res, next) => {
     for (const paramName of paramNames) {
@@ -388,8 +376,7 @@ const validateBoolean = (field) => {
 };
 
 module.exports = {
-  validateObjectId,
-  validateObjectIds,
+  validateObjectIds,  
   validatePagination,
   validateEmail,
   validatePassword,

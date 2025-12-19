@@ -1,5 +1,5 @@
 const router = require('express').Router();
-const auth = require('../middleware/auth');
+const auth = require('../middleware/auth').auth;
 const notifyCtrl = require('../controllers/notifyCtrl');
 const validateObjectId = require('../middleware/validateObjectId');
 const { validatePagination } = require('../middleware/validation');

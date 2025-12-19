@@ -1,27 +1,32 @@
 const nodemailer = require('nodemailer');
 
-const sendEmail = async (to, subject, html) => {
-  try {
-    const transporter = nodemailer.createTransport({
-      service: 'gmail', 
-      auth: {
-        user: process.env.EMAIL_USERNAME,
-        pass: process.env.EMAIL_PASSWORD
+const sendEmail = async (to, subject, html, retries = 3) => {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const transporter = nodemailer.createTransport({
+        service: 'gmail',
+        auth: {
+          user: process.env.EMAIL_USERNAME,
+          pass: process.env.EMAIL_PASSWORD
+        }
+      });
+
+      const mailOptions = {
+        from: process.env.EMAIL_USERNAME,
+        to: to,
+        subject: subject,
+        html: html
+      };
+
+      const info = await transporter.sendMail(mailOptions);
+      return info;
+    } catch (error) {
+      if (i === retries - 1) {
+        console.error('Error sending email after retries:', error);
+        throw error;
       }
-    });
-
-    const mailOptions = {
-      from: process.env.EMAIL_USERNAME,
-      to: to,
-      subject: subject,
-      html: html
-    };
-
-    const info = await transporter.sendMail(mailOptions);
-    return info;
-  } catch (error) {
-    console.error('Error sending email:', error);
-    throw error;
+      await new Promise(res => setTimeout(res, 1000 * (i + 1)));
+    }
   }
 };
 

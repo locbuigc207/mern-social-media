@@ -14,23 +14,15 @@ const SocketServer = (httpServer) => {
     pingInterval: 25000
   });
 
-  const handleSocketError = (eventName, error, data = {}) => {
-    logger.error(`Socket error in ${eventName}:`, error, data);
-  };
 
   const getUsersFromIds = (ids) => {
     try {
-      if (!Array.isArray(ids)) {
-        logger.warn('getUsersFromIds received non-array:', typeof ids);
-        return [];
-      }
-
+      if (!Array.isArray(ids)) return [];
       const result = [];
       for (const id of ids) {
-        const socketId = users.get(id?.toString());
-        if (socketId) {
-          result.push({ id, socketId });
-        }
+        if (!id) continue;
+        const socketId = users.get(id.toString());
+        if (socketId) result.push({ id, socketId });
       }
       return result;
     } catch (error) {
@@ -39,706 +31,133 @@ const SocketServer = (httpServer) => {
     }
   };
 
+  const getFollowersArray = (followers) => Array.isArray(followers) ? followers : [];
+
+  const cleanupStaleConnections = () => {
+    const connectedSockets = Array.from(io.sockets.sockets.keys());
+    for (const [userId, socketId] of users.entries()) {
+      if (!connectedSockets.includes(socketId)) users.delete(userId);
+    }
+    for (const [adminId, socketId] of admins.entries()) {
+      if (!connectedSockets.includes(socketId)) admins.delete(adminId);
+    }
+    logger.info(`🧹 Cleanup complete. Users: ${users.size}, Admins: ${admins.size}`);
+  };
+
+  setInterval(cleanupStaleConnections, 5 * 60 * 1000);
+
+
   io.on('connection', (socket) => {
     logger.info(`🔌 New socket connection: ${socket.id}`);
 
     const handleError = (eventName, error, data = {}) => {
       logger.error(`Socket error in ${eventName}:`, error, data);
-      socket.emit('error', { 
-        event: eventName,
-        message: 'An error occurred processing your request' 
-      });
+      socket.emit('error', { event: eventName, message: 'Server error' });
     };
 
     socket.on("joinUser", (id) => {
-      try {
-        if (!id) {
-          logger.warn('joinUser called without ID');
-          return;
-        }
-
-        users.set(id.toString(), socket.id);
-        logger.info(`👤 User joined: ${id}, Total users: ${users.size}`);
-        socket.broadcast.emit("userOnline", id);
-      } catch (error) {
-        handleError('joinUser', error, { id });
-      }
+      if (!id) return;
+      const userId = id.toString();
+      users.set(userId, socket.id);
+      socket.broadcast.emit("userOnline", userId);
+      socket.emit("connectionStatus", { connected: true, userId, onlineUsers: Array.from(users.keys()) });
+      logger.info(`👤 User joined: ${userId}`);
     });
 
     socket.on("joinAdmin", (id) => {
-      try {
-        if (!id) {
-          logger.warn('joinAdmin called without ID');
-          return;
-        }
-
-        admins.set(id.toString(), socket.id);
-        logger.info(`👨‍💼 Admin joined: ${id}, Total admins: ${admins.size}`);
-        socket.to(socket.id).emit("activeUsers", users.size);
-      } catch (error) {
-        handleError('joinAdmin', error, { id });
-      }
+      if (!id) return;
+      admins.set(id.toString(), socket.id);
+      socket.emit("activeUsers", users.size);
+      logger.info(`👨‍💼 Admin joined: ${id}`);
     });
 
     socket.on("disconnect", () => {
-      try {
-        let disconnectedUserId = null;
-        let disconnectedAdminId = null;
-
-        for (const [userId, socketId] of users.entries()) {
-          if (socketId === socket.id) {
-            disconnectedUserId = userId;
-            users.delete(userId);
-            break;
-          }
+      let disconnectedUserId = null;
+      for (const [userId, socketId] of users.entries()) {
+        if (socketId === socket.id) {
+          disconnectedUserId = userId;
+          users.delete(userId);
+          break;
         }
-
-        for (const [adminId, socketId] of admins.entries()) {
-          if (socketId === socket.id) {
-            disconnectedAdminId = adminId;
-            admins.delete(adminId);
-            break;
-          }
-        }
-
-        if (disconnectedUserId) {
-          logger.info(`👋 User disconnected: ${disconnectedUserId}`);
-          socket.broadcast.emit("userOffline", disconnectedUserId);
-        }
-
-        if (disconnectedAdminId) {
-          logger.info(`👋 Admin disconnected: ${disconnectedAdminId}`);
-        }
-
-        logger.info(`📊 Remaining - Users: ${users.size}, Admins: ${admins.size}`);
-      } catch (error) {
-        logger.error('Error in disconnect handler:', error);
       }
+      for (const [adminId, socketId] of admins.entries()) {
+        if (socketId === socket.id) {
+          admins.delete(adminId);
+          break;
+        }
+      }
+      if (disconnectedUserId) socket.broadcast.emit("userOffline", disconnectedUserId);
+      logger.info(`👋 Disconnected: ${socket.id}`);
     });
 
-    socket.on("likePost", (newPost) => {
-      try {
-        if (!newPost || !newPost.user) {
-          logger.warn('likePost received invalid data');
-          return;
-        }
+    const handlePostEvent = (newPost, clientEvent) => {
+      if (!newPost?.user) return;
+      const ids = [...getFollowersArray(newPost.user.followers), newPost.user._id];
+      getUsersFromIds(ids).forEach(c => socket.to(c.socketId).emit(clientEvent, newPost));
+    };
 
-        let ids = [...(newPost.user.followers || []), newPost.user._id];
-        const clients = getUsersFromIds(ids);
-        clients.forEach((client) => {
-          socket.to(client.socketId).emit("likeToClient", newPost);
-        });
-      } catch (error) {
-        handleError('likePost', error, { postId: newPost?._id });
-      }
-    });
-
-    socket.on("unLikePost", (newPost) => {
-      try {
-        if (!newPost || !newPost.user) {
-          logger.warn('unLikePost received invalid data');
-          return;
-        }
-
-        let ids = [...(newPost.user.followers || []), newPost.user._id];
-        const clients = getUsersFromIds(ids);
-        clients.forEach((client) => {
-          socket.to(client.socketId).emit("unLikeToClient", newPost);
-        });
-      } catch (error) {
-        handleError('unLikePost', error, { postId: newPost?._id });
-      }
-    });
-
-    socket.on("createComment", (newPost) => {
-      try {
-        if (!newPost || !newPost.user) {
-          logger.warn('createComment received invalid data');
-          return;
-        }
-
-        let ids = [...(newPost.user.followers || []), newPost.user._id];
-        const clients = getUsersFromIds(ids);
-        clients.forEach((client) => {
-          socket.to(client.socketId).emit("createCommentToClient", newPost);
-        });
-      } catch (error) {
-        handleError('createComment', error, { postId: newPost?._id });
-      }
-    });
-
-    socket.on("deleteComment", (newPost) => {
-      try {
-        if (!newPost || !newPost.user) {
-          logger.warn('deleteComment received invalid data');
-          return;
-        }
-
-        let ids = [...(newPost.user.followers || []), newPost.user._id];
-        const clients = getUsersFromIds(ids);
-        clients.forEach((client) => {
-          socket.to(client.socketId).emit("deleteCommentToClient", newPost);
-        });
-      } catch (error) {
-        handleError('deleteComment', error, { postId: newPost?._id });
-      }
-    });
-
-    socket.on("follow", (newUser) => {
-      try {
-        if (!newUser || !newUser._id) {
-          logger.warn('follow received invalid data');
-          return;
-        }
-
-        const socketId = users.get(newUser._id.toString());
-        if (socketId) socket.to(socketId).emit("followToClient", newUser);
-      } catch (error) {
-        handleError('follow', error, { userId: newUser?._id });
-      }
-    });
-
-    socket.on("unFollow", (newUser) => {
-      try {
-        if (!newUser || !newUser._id) {
-          logger.warn('unFollow received invalid data');
-          return;
-        }
-
-        const socketId = users.get(newUser._id.toString());
-        if (socketId) socket.to(socketId).emit("unFollowToClient", newUser);
-      } catch (error) {
-        handleError('unFollow', error, { userId: newUser?._id });
-      }
-    });
+    socket.on("likePost", (p) => handlePostEvent(p, "likeToClient"));
+    socket.on("unLikePost", (p) => handlePostEvent(p, "unLikeToClient"));
+    socket.on("createComment", (p) => handlePostEvent(p, "createCommentToClient"));
+    socket.on("deleteComment", (p) => handlePostEvent(p, "deleteCommentToClient"));
 
     socket.on("createNotify", (msg) => {
-      try {
-        if (!msg || !msg.recipients) {
-          logger.warn('createNotify received invalid data');
-          return;
-        }
-
-        const clients = getUsersFromIds(msg.recipients);
-        clients.forEach((client) => {
-          socket.to(client.socketId).emit("createNotifyToClient", msg);
-        });
-      } catch (error) {
-        handleError('createNotify', error);
-      }
-    });
-
-    socket.on("removeNotify", (msg) => {
-      try {
-        if (!msg || !msg.recipients) {
-          logger.warn('removeNotify received invalid data');
-          return;
-        }
-
-        const clients = getUsersFromIds(msg.recipients);
-        clients.forEach((client) => {
-          socket.to(client.socketId).emit("removeNotifyToClient", msg);
-        });
-      } catch (error) {
-        handleError('removeNotify', error);
-      }
+      if (!msg?.recipients) return;
+      const recipients = Array.isArray(msg.recipients) ? msg.recipients : [msg.recipients];
+      getUsersFromIds(recipients).forEach(c => socket.to(c.socketId).emit("createNotifyToClient", msg));
     });
 
     socket.on("addMessage", (msg) => {
-      try {
-        if (!msg || !msg.recipient) {
-          logger.warn('addMessage received invalid data');
-          return;
-        }
-
-        const socketId = users.get(msg.recipient.toString());
-        if (socketId) {
-          socket.to(socketId).emit("addMessageToClient", msg);
-          socket.emit("messageDelivered", { 
-            messageId: msg._id, 
-            deliveredAt: new Date() 
-          });
-        } else {
-          socket.emit("messageOffline", { 
-            messageId: msg._id, 
-            recipient: msg.recipient 
-          });
-        }
-      } catch (error) {
-        handleError('addMessage', error, { messageId: msg?._id });
+      if (!msg?.recipient) return;
+      const socketId = users.get(msg.recipient.toString());
+      if (socketId) {
+        socket.to(socketId).emit("addMessageToClient", msg);
+        socket.emit("messageDelivered", { messageId: msg._id, deliveredAt: new Date() });
       }
     });
 
-    socket.on("markMessageRead", (data) => {
-      try {
-        if (!data || !data.messageId || !data.senderId) {
-          logger.warn('markMessageRead received invalid data');
-          return;
-        }
-
-        const { messageId, senderId } = data;
-        const socketId = users.get(senderId.toString());
-        if (socketId) {
-          socket.to(socketId).emit("messageReadConfirm", { 
-            messageId, 
-            readAt: new Date() 
-          });
-        }
-      } catch (error) {
-        handleError('markMessageRead', error, data);
-      }
+    socket.on("typing", (d) => {
+      const sId = users.get(d?.recipientId?.toString());
+      if (sId) socket.to(sId).emit("userTyping", { userId: d.userId, isTyping: d.isTyping });
     });
 
-    socket.on("typing", (data) => {
-      try {
-        if (!data || !data.recipientId) return;
-
-        const { recipientId, isTyping, userId } = data;
-        const socketId = users.get(recipientId.toString());
-        if (socketId) {
-          socket.to(socketId).emit("userTyping", { userId, isTyping });
-        }
-      } catch (error) {
-        handleError('typing', error, data);
-      }
+    socket.on("createStory", (d) => {
+      if (!d?.story) return;
+      getUsersFromIds(getFollowersArray(d.followers)).forEach(c => {
+        socket.to(c.socketId).emit("newStoryAlert", { user: d.story.user, storyId: d.story._id });
+      });
     });
 
-    socket.on("deleteMessage", (data) => {
-      try {
-        if (!data || !data.messageId || !data.recipientId) {
-          logger.warn('deleteMessage received invalid data');
-          return;
-        }
-
-        const { messageId, recipientId } = data;
-        const socketId = users.get(recipientId.toString());
-        if (socketId) {
-          socket.to(socketId).emit("messageDeleted", { messageId });
-        }
-      } catch (error) {
-        handleError('deleteMessage', error, data);
-      }
+    socket.on("joinGroup", (id) => { if(id) socket.join(`group_${id}`); });
+    
+    socket.on("sendGroupMessage", (d) => {
+      if (d?.groupId) socket.to(`group_${d.groupId}`).emit("newGroupMessage", { ...d, timestamp: new Date() });
     });
 
-    socket.on("getActiveUsers", (id) => {
-      try {
-        if (!id) return;
-
-        const adminSocketId = admins.get(id.toString());
-        if (adminSocketId) {
-          socket.to(adminSocketId).emit("getActiveUsersToClient", users.size);
-        }
-      } catch (error) {
-        handleError('getActiveUsers', error, { id });
-      }
+    socket.on("groupCallStarted", (d) => {
+      if (d?.groupId) socket.to(`group_${d.groupId}`).emit("incomingGroupCall", { ...d, timestamp: new Date() });
     });
 
-    socket.on("checkUserOnline", (userId) => {
-      try {
-        if (!userId) return;
-
-        const isOnline = users.has(userId.toString());
-        socket.emit("userOnlineStatus", { userId, isOnline });
-      } catch (error) {
-        handleError('checkUserOnline', error, { userId });
-      }
+    socket.on("groupTyping", (d) => {
+      if (d?.groupId) socket.to(`group_${d.groupId}`).emit("groupTypingStatus", d);
     });
 
-    socket.on("getOnlineUsers", () => {
-      try {
-        const onlineUserIds = Array.from(users.keys());
-        socket.emit("onlineUsersList", onlineUserIds);
-      } catch (error) {
-        handleError('getOnlineUsers', error);
-      }
+    socket.on("editGroupMessage", (d) => {
+      if (d?.groupId) socket.to(`group_${d.groupId}`).emit("groupMessageEdited", d);
     });
 
-    socket.on("userBlocked", (data) => {
-      try {
-        if (!data || !data.blockedUserId) return;
-
-        const socketId = users.get(data.blockedUserId.toString());
-        if (socketId) {
-          socket.to(socketId).emit("youWereBlocked", { 
-            blockerId: data.blockerId 
-          });
-        }
-      } catch (error) {
-        handleError('userBlocked', error, data);
-      }
+    socket.on("pinGroupMessage", (d) => {
+      if (d?.groupId) socket.to(`group_${d.groupId}`).emit("groupMessagePinned", d);
     });
+    
+  }); 
 
-    socket.on("userUnblocked", (data) => {
-      try {
-        if (!data || !data.unblockedUserId) return;
-
-        const socketId = users.get(data.unblockedUserId.toString());
-        if (socketId) {
-          socket.to(socketId).emit("youWereUnblocked", { 
-            unblockerId: data.unblockerId 
-          });
-        }
-      } catch (error) {
-        handleError('userUnblocked', error, data);
-      }
-    });
-
-    socket.on("postScheduled", (data) => {
-      try {
-        if (!data || !data.userId || !data.post) return;
-
-        const { userId, post } = data;
-        const socketId = users.get(userId.toString());
-        if (socketId) {
-          socket.to(socketId).emit("scheduleConfirmed", { 
-            post, 
-            scheduledDate: post.scheduledDate 
-          });
-        }
-      } catch (error) {
-        handleError('postScheduled', error, data);
-      }
-    });
-
-    socket.on("scheduledPostPublished", (data) => {
-      try {
-        if (!data || !data.post) return;
-
-        const { post } = data;
-        const ownerSocketId = users.get(post.user._id.toString());
-        
-        if (ownerSocketId) {
-          socket.to(ownerSocketId).emit("yourScheduledPostPublished", { 
-            postId: post._id, 
-            publishedAt: new Date() 
-          });
-        }
-
-        if (post.user.followers) {
-          const followers = getUsersFromIds(post.user.followers);
-          followers.forEach(follower => {
-            socket.to(follower.socketId).emit("newPostFromFollowing", { post });
-          });
-        }
-      } catch (error) {
-        handleError('scheduledPostPublished', error, data);
-      }
-    });
-
-    socket.on("createStory", (data) => {
-      try {
-        if (!data || !data.story || !data.followers) return;
-
-        const { story, followers } = data;
-        const clients = getUsersFromIds(followers);
-        clients.forEach((client) => {
-          socket.to(client.socketId).emit("newStoryAlert", { 
-            user: story.user, 
-            storyId: story._id, 
-            hasUnviewed: true 
-          });
-        });
-      } catch (error) {
-        handleError('createStory', error, data);
-      }
-    });
-
-    socket.on("viewStory", (data) => {
-      try {
-        if (!data || !data.storyId || !data.viewerId || !data.storyOwnerId) return;
-
-        const { storyId, viewerId, storyOwnerId } = data;
-        const ownerSocketId = users.get(storyOwnerId.toString());
-        if (ownerSocketId) {
-          socket.to(ownerSocketId).emit("storyViewed", { 
-            storyId, 
-            viewer: viewerId, 
-            viewedAt: new Date() 
-          });
-        }
-      } catch (error) {
-        handleError('viewStory', error, data);
-      }
-    });
-
-    socket.on("replyToStory", (data) => {
-      try {
-        if (!data || !data.storyOwnerId || !data.reply) return;
-
-        const { storyOwnerId, reply } = data;
-        const ownerSocketId = users.get(storyOwnerId.toString());
-        if (ownerSocketId) {
-          socket.to(ownerSocketId).emit("storyReply", { 
-            reply, 
-            timestamp: new Date() 
-          });
-        }
-      } catch (error) {
-        handleError('replyToStory', error, data);
-      }
-    });
-
-    socket.on("deleteStory", (data) => {
-      try {
-        if (!data || !data.storyId || !data.followers) return;
-
-        const { storyId, followers } = data;
-        const clients = getUsersFromIds(followers);
-        clients.forEach((client) => {
-          socket.to(client.socketId).emit("storyDeleted", { storyId });
-        });
-      } catch (error) {
-        handleError('deleteStory', error, data);
-      }
-    });
-
-    socket.on("checkStoriesUpdate", (userId) => {
-      try {
-        socket.emit("storiesUpdateStatus", { 
-          hasNewStories: true, 
-          timestamp: new Date() 
-        });
-      } catch (error) {
-        handleError('checkStoriesUpdate', error, { userId });
-      }
-    });
-
-    // --- GROUPS ---
-    socket.on("joinGroup", (groupId) => {
-      try {
-        if (!groupId) return;
-
-        socket.join(`group_${groupId}`);
-        logger.info(`User joined group room: ${groupId}`);
-      } catch (error) {
-        handleError('joinGroup', error, { groupId });
-      }
-    });
-
-    socket.on("leaveGroup", (groupId) => {
-      try {
-        if (!groupId) return;
-
-        socket.leave(`group_${groupId}`);
-        logger.info(`User left group room: ${groupId}`);
-      } catch (error) {
-        handleError('leaveGroup', error, { groupId });
-      }
-    });
-
-    socket.on("sendGroupMessage", (data) => {
-      try {
-        if (!data || !data.groupId || !data.message) return;
-
-        const { groupId, message } = data;
-        socket.to(`group_${groupId}`).emit("newGroupMessage", { 
-          groupId, 
-          message, 
-          timestamp: new Date() 
-        });
-      } catch (error) {
-        handleError('sendGroupMessage', error, data);
-      }
-    });
-
-    socket.on("groupTyping", (data) => {
-      try {
-        if (!data || !data.groupId) return;
-
-        const { groupId, userId, username, isTyping } = data;
-        socket.to(`group_${groupId}`).emit("groupTypingStatus", { 
-          groupId, 
-          userId, 
-          username, 
-          isTyping 
-        });
-      } catch (error) {
-        handleError('groupTyping', error, data);
-      }
-    });
-
-    socket.on("groupMessageReaction", (data) => {
-      try {
-        if (!data || !data.groupId || !data.messageId) return;
-
-        const { groupId, messageId, userId, emoji } = data;
-        socket.to(`group_${groupId}`).emit("groupReactionAdded", { 
-          messageId, 
-          userId, 
-          emoji, 
-          timestamp: new Date() 
-        });
-      } catch (error) {
-        handleError('groupMessageReaction', error, data);
-      }
-    });
-
-    socket.on("memberAddedToGroup", (data) => {
-      try {
-        if (!data || !data.groupId || !data.newMembers) return;
-
-        const { groupId, newMembers, addedBy } = data;
-        socket.to(`group_${groupId}`).emit("groupMemberAdded", { 
-          groupId, 
-          newMembers, 
-          addedBy, 
-          timestamp: new Date() 
-        });
-        
-        newMembers.forEach(memberId => {
-          const socketId = users.get(memberId.toString());
-          if (socketId) {
-            socket.to(socketId).emit("addedToGroup", { 
-              groupId, 
-              addedBy, 
-              timestamp: new Date() 
-            });
-          }
-        });
-      } catch (error) {
-        handleError('memberAddedToGroup', error, data);
-      }
-    });
-
-    socket.on("memberRemovedFromGroup", (data) => {
-      try {
-        if (!data || !data.groupId || !data.removedMemberId) return;
-
-        const { groupId, removedMemberId, removedBy } = data;
-        socket.to(`group_${groupId}`).emit("groupMemberRemoved", { 
-          groupId, 
-          removedMemberId, 
-          removedBy, 
-          timestamp: new Date() 
-        });
-        
-        const socketId = users.get(removedMemberId.toString());
-        if (socketId) {
-          socket.to(socketId).emit("removedFromGroup", { 
-            groupId, 
-            removedBy, 
-            timestamp: new Date() 
-          });
-        }
-      } catch (error) {
-        handleError('memberRemovedFromGroup', error, data);
-      }
-    });
-
-    socket.on("groupInfoUpdated", (data) => {
-      try {
-        if (!data || !data.groupId || !data.updates) return;
-
-        const { groupId, updates, updatedBy } = data;
-        socket.to(`group_${groupId}`).emit("groupInfoChanged", { 
-          groupId, 
-          updates, 
-          updatedBy, 
-          timestamp: new Date() 
-        });
-      } catch (error) {
-        handleError('groupInfoUpdated', error, data);
-      }
-    });
-
-    socket.on("memberLeftGroup", (data) => {
-      try {
-        if (!data || !data.groupId || !data.memberId) return;
-
-        const { groupId, memberId } = data;
-        socket.to(`group_${groupId}`).emit("groupMemberLeft", { 
-          groupId, 
-          memberId, 
-          timestamp: new Date() 
-        });
-      } catch (error) {
-        handleError('memberLeftGroup', error, data);
-      }
-    });
-
-    socket.on("groupMessageRead", (data) => {
-      try {
-        if (!data || !data.groupId || !data.messageIds) return;
-
-        const { groupId, messageIds, userId } = data;
-        socket.to(`group_${groupId}`).emit("groupMessagesRead", { 
-          groupId, 
-          messageIds, 
-          userId, 
-          readAt: new Date() 
-        });
-      } catch (error) {
-        handleError('groupMessageRead', error, data);
-      }
-    });
-
-    socket.on("deleteGroupMessage", (data) => {
-      try {
-        if (!data || !data.groupId || !data.messageId) return;
-
-        const { groupId, messageId, deletedBy } = data;
-        socket.to(`group_${groupId}`).emit("groupMessageDeleted", { 
-          groupId, 
-          messageId, 
-          deletedBy, 
-          timestamp: new Date() 
-        });
-      } catch (error) {
-        handleError('deleteGroupMessage', error, data);
-      }
-    });
-
-    socket.on("editGroupMessage", (data) => {
-      try {
-        if (!data || !data.groupId || !data.messageId || !data.newText) return;
-
-        const { groupId, messageId, newText, editedBy } = data;
-        socket.to(`group_${groupId}`).emit("groupMessageEdited", { 
-          groupId, 
-          messageId, 
-          newText, 
-          editedBy, 
-          timestamp: new Date() 
-        });
-      } catch (error) {
-        handleError('editGroupMessage', error, data);
-      }
-    });
-
-    socket.on("pinGroupMessage", (data) => {
-      try {
-        if (!data || !data.groupId || !data.messageId) return;
-
-        const { groupId, messageId, pinnedBy } = data;
-        socket.to(`group_${groupId}`).emit("groupMessagePinned", { 
-          groupId, 
-          messageId, 
-          pinnedBy, 
-          timestamp: new Date() 
-        });
-      } catch (error) {
-        handleError('pinGroupMessage', error, data);
-      }
-    });
-
-    socket.on("groupCallStarted", (data) => {
-      try {
-        if (!data || !data.groupId || !data.callerId) return;
-
-        const { groupId, callerId, callType } = data;
-        socket.to(`group_${groupId}`).emit("incomingGroupCall", { 
-          groupId, 
-          callerId, 
-          callType, 
-          timestamp: new Date() 
-        });
-      } catch (error) {
-        handleError('groupCallStarted', error, data);
-      }
-    });
+  io.getStats = () => ({
+    totalUsers: users.size,
+    totalAdmins: admins.size,
+    connectedSockets: io.sockets.sockets.size,
+    onlineUsers: Array.from(users.keys())
   });
-
-  logger.info(' Socket.IO server initialized');
 
   return io;
 };
