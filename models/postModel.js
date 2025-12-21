@@ -100,7 +100,7 @@ postSchema.index({ likes: 1 });
 
 postSchema.index({ status: 1, isDraft: 1, moderationStatus: 1, createdAt: -1 });
 
-postSchema.index({ content: 'text' });
+postSchema.index({ content: "text" });
 
 postSchema.methods.incrementReportCount = function () {
   this.reportCount += 1;
@@ -133,8 +133,12 @@ postSchema.methods.unhidePost = function (userId) {
   return this.save();
 };
 
-postSchema.pre('save', function(next) {
-  if (this.isModified('status') && this.status === 'published' && !this.publishedAt) {
+postSchema.pre("save", function (next) {
+  if (
+    this.isModified("status") &&
+    this.status === "published" &&
+    !this.publishedAt
+  ) {
     this.publishedAt = new Date();
   }
   next();

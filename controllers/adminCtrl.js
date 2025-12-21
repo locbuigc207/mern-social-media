@@ -5,25 +5,35 @@ const Reports = require("../models/reportModel");
 const Notifies = require("../models/notifyModel");
 const logger = require("../utils/logger");
 const { asyncHandler } = require("../middleware/errorHandler");
-const { NotFoundError, ValidationError, AuthorizationError } = require("../utils/AppError");
+const {
+  NotFoundError,
+  ValidationError,
+  AuthorizationError,
+} = require("../utils/AppError");
 
 const adminCtrl = {
   getTotalUsers: asyncHandler(async (req, res) => {
     const users = await Users.find({ role: "user" });
     const total_users = users.length;
 
-    logger.info('Total users retrieved', { total_users, adminId: req.user._id });
+    logger.info("Total users retrieved", {
+      total_users,
+      adminId: req.user._id,
+    });
     res.json({ total_users });
   }),
 
   getTotalPosts: asyncHandler(async (req, res) => {
     const posts = await Posts.find({
-      status: 'published',
-      isDraft: false
+      status: "published",
+      isDraft: false,
     });
     const total_posts = posts.length;
 
-    logger.info('Total posts retrieved', { total_posts, adminId: req.user._id });
+    logger.info("Total posts retrieved", {
+      total_posts,
+      adminId: req.user._id,
+    });
     res.json({ total_posts });
   }),
 
@@ -31,33 +41,98 @@ const adminCtrl = {
     const comments = await Comments.find();
     const total_comments = comments.length;
 
-    logger.info('Total comments retrieved', { total_comments, adminId: req.user._id });
+    logger.info("Total comments retrieved", {
+      total_comments,
+      adminId: req.user._id,
+    });
     res.json({ total_comments });
   }),
 
   getTotalLikes: asyncHandler(async (req, res) => {
     const posts = await Posts.find({
-      status: 'published',
-      isDraft: false
+      status: "published",
+      isDraft: false,
     });
     let total_likes = 0;
     posts.forEach((post) => (total_likes += post.likes.length));
 
-    logger.info('Total likes retrieved', { total_likes, adminId: req.user._id });
+    logger.info("Total likes retrieved", {
+      total_likes,
+      adminId: req.user._id,
+    });
     res.json({ total_likes });
   }),
 
   getTotalSpamPosts: asyncHandler(async (req, res) => {
     const posts = await Posts.find({
-      status: 'published',
-      isDraft: false
+      status: "published",
+      isDraft: false,
     });
 
-    const SPAM_THRESHOLD = parseInt(process.env.SPAM_THRESHOLD) || 2;
-    const reportedPosts = posts.filter(post => post.reports.length > SPAM_THRESHOLD);
+    const SPAM_THRESHOLD = parseInt(process.env.SPAM_THRESHOLD) || 0;
+    const reportedPosts = posts.filter(
+      (post) => post.reports.length > SPAM_THRESHOLD
+    );
     const total_spam_posts = reportedPosts.length;
 
-    logger.info('Total spam posts retrieved', { total_spam_posts, adminId: req.user._id });
+    logger.info("Total spam posts retrieved", {
+      total_spam_posts,
+      adminId: req.user._id,
+    });
+    res.json({ total_spam_posts });
+  }),
+
+  // getSpamPosts: asyncHandler(async (req, res) => {
+  //   const page = parseInt(req.query.page) || 1;
+  //   const limit = parseInt(req.query.limit) || 20;
+  //   const skip = (page - 1) * limit;
+
+  //   const SPAM_THRESHOLD = parseInt(process.env.SPAM_THRESHOLD) || 0;
+
+  //   const posts = await Posts.find({
+  //     status: "published",
+  //     isDraft: false,
+  //   })
+  //     .select("user createdAt reports content images")
+  //     .populate({
+  //       path: "user",
+  //       select: "username avatar email fullname",
+  //     })
+  //     .sort("-reports");
+
+  //   const spamPosts = posts.filter(
+  //     (post) => post.reports.length > SPAM_THRESHOLD
+  //   );
+  //   const paginatedPosts = spamPosts.slice(skip, skip + limit);
+
+  //   logger.info("Spam posts retrieved", {
+  //     total: spamPosts.length,
+  //     page,
+  //     adminId: req.user._id,
+  //   });
+
+  //   res.json({
+  //     spamPosts: paginatedPosts,
+  //     total: spamPosts.length,
+  //     page,
+  //     totalPages: Math.ceil(spamPosts.length / limit),
+  //   });
+  // }),
+  // Cập nhật hàm getTotalSpamPosts: Đếm dựa trên bảng Reports
+  getTotalSpamPosts: asyncHandler(async (req, res) => {
+    // Lấy tất cả ID bài viết đã bị report
+    const uniqueReportedPosts = await Reports.distinct("targetId", {
+      reportType: "post",
+      status: "pending", // Chỉ đếm các bài đang chờ xử lý
+    });
+
+    // Nếu muốn chính xác hơn với threshold, cần dùng aggregate (nhưng distinct là đủ nhanh cho dashboard)
+    const total_spam_posts = uniqueReportedPosts.length;
+
+    logger.info("Total spam posts retrieved via Reports", {
+      total_spam_posts,
+      adminId: req.user._id,
+    });
     res.json({ total_spam_posts });
   }),
 
@@ -66,55 +141,98 @@ const adminCtrl = {
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
 
-    const SPAM_THRESHOLD = parseInt(process.env.SPAM_THRESHOLD) || 2;
+    // 1. Dùng Aggregate để gom nhóm các Report theo bài viết
+    const reportedPostsData = await Reports.aggregate([
+      { $match: { reportType: "post", status: "pending" } },
+      {
+        $group: {
+          _id: "$targetId",
+          count: { $sum: 1 },
+          latestReport: { $max: "$createdAt" },
+          reasons: { $addToSet: "$reason" },
+          reporterIds: { $addToSet: "$reportedBy" }, // Lấy danh sách ID người báo cáo
+        },
+      },
+      { $match: { count: { $gt: 0 } } },
+      { $sort: { count: -1, latestReport: -1 } },
+      { $skip: skip },
+      { $limit: limit },
+    ]);
 
-    const posts = await Posts.find({
-      status: 'published',
-      isDraft: false
-    })
-      .select("user createdAt reports content images")
+    // 2. Lấy danh sách ID bài viết từ kết quả trên
+    const postIds = reportedPostsData.map((item) => item._id);
+
+    // 3. Tìm thông tin chi tiết các bài viết đó từ bảng Posts
+    const posts = await Posts.find({ _id: { $in: postIds } })
+      .select("user createdAt content images reports")
       .populate({
         path: "user",
-        select: "username avatar email fullname"
+        select: "username avatar email fullname",
+      });
+
+    // 4. Ghép dữ liệu (SỬA LỖI Ở ĐÂY: Thêm async vào trong map)
+    const finalPosts = await Promise.all(
+      posts.map(async (post) => {
+        const reportData = reportedPostsData.find(
+          (r) => r._id.toString() === post._id.toString()
+        );
+        const postObj = post.toObject();
+
+        // Ghi đè số liệu thực tế
+        postObj.reportCountReal = reportData ? reportData.count : 0;
+        postObj.reportReasons = reportData ? reportData.reasons : [];
+
+        // Lấy thông tin người báo cáo (Reporters)
+        if (reportData && reportData.reporterIds) {
+          const reporters = await Users.find({
+            _id: { $in: reportData.reporterIds },
+          }).select("username avatar");
+          postObj.reporters = reporters;
+        } else {
+          postObj.reporters = [];
+        }
+
+        return postObj;
       })
-      .sort('-reports');
+    );
 
-    const spamPosts = posts.filter((post) => post.reports.length > SPAM_THRESHOLD);
-    const paginatedPosts = spamPosts.slice(skip, skip + limit);
+    const total = await Reports.distinct("targetId", {
+      reportType: "post",
+      status: "pending",
+    });
 
-    logger.info('Spam posts retrieved', {
-      total: spamPosts.length,
+    logger.info("Spam posts retrieved via Reports Aggregation", {
+      total: total.length,
       page,
-      adminId: req.user._id
+      adminId: req.user._id,
     });
 
     res.json({
-      spamPosts: paginatedPosts,
-      total: spamPosts.length,
+      spamPosts: finalPosts,
+      total: total.length,
       page,
-      totalPages: Math.ceil(spamPosts.length / limit)
+      totalPages: Math.ceil(total.length / limit),
     });
   }),
-
   getSpamPostDetail: asyncHandler(async (req, res) => {
     const post = await Posts.findById(req.params.id)
-      .populate('user', 'username avatar email fullname')
-      .populate('reports', 'username avatar email fullname')
+      .populate("user", "username avatar email fullname")
+      .populate("reports", "username avatar email fullname")
       .populate({
-        path: 'comments',
+        path: "comments",
         populate: {
-          path: 'user',
-          select: 'username avatar'
-        }
+          path: "user",
+          select: "username avatar",
+        },
       });
 
     if (!post) {
       throw new NotFoundError("Post");
     }
 
-    logger.info('Spam post detail retrieved', {
+    logger.info("Spam post detail retrieved", {
       postId: req.params.id,
-      adminId: req.user._id
+      adminId: req.user._id,
     });
 
     res.json({ post });
@@ -131,9 +249,9 @@ const adminCtrl = {
 
     await Comments.deleteMany({ _id: { $in: post.comments } });
 
-    logger.audit('Spam post deleted', req.user._id, {
+    logger.audit("Spam post deleted", req.user._id, {
       postId: req.params.id,
-      postUserId: post.user
+      postUserId: post.user,
     });
 
     res.json({ msg: "Post deleted successfully." });
@@ -143,53 +261,53 @@ const adminCtrl = {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
-    const search = req.query.search || '';
-    const role = req.query.role || 'user';
+    const search = req.query.search || "";
+    const role = req.query.role || "user";
     const isVerified = req.query.isVerified;
 
     let query = { role };
 
     if (search) {
       query.$or = [
-        { username: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } },
-        { fullname: { $regex: search, $options: 'i' } }
+        { username: { $regex: search, $options: "i" } },
+        { email: { $regex: search, $options: "i" } },
+        { fullname: { $regex: search, $options: "i" } },
       ];
     }
 
     if (isVerified !== undefined) {
-      query.isVerified = isVerified === 'true';
+      query.isVerified = isVerified === "true";
     }
 
     const users = await Users.find(query)
-      .select('-password')
-      .populate('followers following', 'username avatar')
-      .sort('-createdAt')
+      .select("-password")
+      .populate("followers following", "username avatar")
+      .sort("-createdAt")
       .skip(skip)
       .limit(limit);
 
     const total = await Users.countDocuments(query);
 
-    logger.info('Users list retrieved by admin', {
+    logger.info("Users list retrieved by admin", {
       total,
       page,
       search,
-      adminId: req.user._id
+      adminId: req.user._id,
     });
 
     res.json({
       users,
       total,
       page,
-      totalPages: Math.ceil(total / limit)
+      totalPages: Math.ceil(total / limit),
     });
   }),
 
   getUserDetail: asyncHandler(async (req, res) => {
     const user = await Users.findById(req.params.id)
-      .select('-password')
-      .populate('followers following', 'username avatar fullname')
-      .populate('saved');
+      .select("-password")
+      .populate("followers following", "username avatar fullname")
+      .populate("saved");
 
     if (!user) {
       throw new NotFoundError("User");
@@ -197,16 +315,16 @@ const adminCtrl = {
 
     const userPosts = await Posts.countDocuments({
       user: req.params.id,
-      status: 'published'
+      status: "published",
     });
 
     const userComments = await Comments.countDocuments({
-      user: req.params.id
+      user: req.params.id,
     });
 
-    logger.info('User detail retrieved by admin', {
+    logger.info("User detail retrieved by admin", {
       userId: req.params.id,
-      adminId: req.user._id
+      adminId: req.user._id,
     });
 
     res.json({
@@ -215,8 +333,8 @@ const adminCtrl = {
         totalPosts: userPosts,
         totalComments: userComments,
         totalFollowers: user.followers.length,
-        totalFollowing: user.following.length
-      }
+        totalFollowing: user.following.length,
+      },
     });
   }),
 
@@ -233,7 +351,7 @@ const adminCtrl = {
       throw new NotFoundError("User");
     }
 
-    if (user.role === 'admin') {
+    if (user.role === "admin") {
       throw new AuthorizationError("Cannot block admin accounts.");
     }
 
@@ -243,9 +361,9 @@ const adminCtrl = {
     user.blockedAt = new Date();
     await user.save();
 
-    logger.audit('User account blocked', req.user._id, {
+    logger.audit("User account blocked", req.user._id, {
       blockedUserId: req.params.id,
-      reason
+      reason,
     });
 
     res.json({
@@ -253,8 +371,8 @@ const adminCtrl = {
       user: {
         _id: user._id,
         username: user.username,
-        isBlocked: user.isBlocked
-      }
+        isBlocked: user.isBlocked,
+      },
     });
   }),
 
@@ -271,8 +389,8 @@ const adminCtrl = {
     user.blockedAt = undefined;
     await user.save();
 
-    logger.audit('User account unblocked', req.user._id, {
-      unblockedUserId: req.params.id
+    logger.audit("User account unblocked", req.user._id, {
+      unblockedUserId: req.params.id,
     });
 
     res.json({
@@ -280,123 +398,125 @@ const adminCtrl = {
       user: {
         _id: user._id,
         username: user.username,
-        isBlocked: user.isBlocked
-      }
+        isBlocked: user.isBlocked,
+      },
     });
   }),
 
   getSiteAnalytics: asyncHandler(async (req, res) => {
     const { startDate, endDate } = req.query;
 
-    const start = startDate ? new Date(startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const start = startDate
+      ? new Date(startDate)
+      : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const end = endDate ? new Date(endDate) : new Date();
 
     const userGrowth = await Users.aggregate([
       {
         $match: {
           createdAt: { $gte: start, $lte: end },
-          role: 'user'
-        }
+          role: "user",
+        },
       },
       {
         $group: {
           _id: {
-            $dateToString: { format: "%Y-%m-%d", date: "$createdAt" }
+            $dateToString: { format: "%Y-%m-%d", date: "$createdAt" },
           },
-          count: { $sum: 1 }
-        }
+          count: { $sum: 1 },
+        },
       },
-      { $sort: { _id: 1 } }
+      { $sort: { _id: 1 } },
     ]);
 
     const postActivity = await Posts.aggregate([
       {
         $match: {
           createdAt: { $gte: start, $lte: end },
-          status: 'published'
-        }
+          status: "published",
+        },
       },
       {
         $group: {
           _id: {
-            $dateToString: { format: "%Y-%m-%d", date: "$createdAt" }
+            $dateToString: { format: "%Y-%m-%d", date: "$createdAt" },
           },
-          count: { $sum: 1 }
-        }
+          count: { $sum: 1 },
+        },
       },
-      { $sort: { _id: 1 } }
+      { $sort: { _id: 1 } },
     ]);
 
     const engagement = await Posts.aggregate([
       {
         $match: {
           createdAt: { $gte: start, $lte: end },
-          status: 'published'
-        }
+          status: "published",
+        },
       },
       {
         $project: {
           date: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
           likes: { $size: "$likes" },
-          comments: { $size: "$comments" }
-        }
+          comments: { $size: "$comments" },
+        },
       },
       {
         $group: {
           _id: "$date",
           totalLikes: { $sum: "$likes" },
-          totalComments: { $sum: "$comments" }
-        }
+          totalComments: { $sum: "$comments" },
+        },
       },
-      { $sort: { _id: 1 } }
+      { $sort: { _id: 1 } },
     ]);
 
-    logger.info('Site analytics retrieved', {
+    logger.info("Site analytics retrieved", {
       startDate: start,
       endDate: end,
-      adminId: req.user._id
+      adminId: req.user._id,
     });
 
     res.json({
       userGrowth,
       postActivity,
       engagement,
-      dateRange: { start, end }
+      dateRange: { start, end },
     });
   }),
 
   getRecentActivities: asyncHandler(async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
 
-    const recentUsers = await Users.find({ role: 'user' })
-      .select('username avatar email createdAt')
-      .sort('-createdAt')
+    const recentUsers = await Users.find({ role: "user" })
+      .select("username avatar email createdAt")
+      .sort("-createdAt")
       .limit(limit);
 
     const recentPosts = await Posts.find({
-      status: 'published',
-      isDraft: false
+      status: "published",
+      isDraft: false,
     })
-      .select('content images user createdAt')
-      .populate('user', 'username avatar')
-      .sort('-createdAt')
+      .select("content images user createdAt")
+      .populate("user", "username avatar")
+      .sort("-createdAt")
       .limit(limit);
 
     const recentComments = await Comments.find()
-      .select('content user postId createdAt')
-      .populate('user', 'username avatar')
-      .sort('-createdAt')
+      .select("content user postId createdAt")
+      .populate("user", "username avatar")
+      .sort("-createdAt")
       .limit(limit);
 
-    logger.info('Recent activities retrieved', {
+    logger.info("Recent activities retrieved", {
       limit,
-      adminId: req.user._id
+      adminId: req.user._id,
     });
 
     res.json({
       recentUsers,
       recentPosts,
-      recentComments
+      recentComments,
     });
   }),
 
@@ -406,39 +526,39 @@ const adminCtrl = {
     const skip = (page - 1) * limit;
 
     const notifications = await Notifies.find()
-      .populate('user', 'username avatar email')
-      .sort('-createdAt')
+      .populate("user", "username avatar email")
+      .sort("-createdAt")
       .skip(skip)
       .limit(limit);
 
     const total = await Notifies.countDocuments();
 
-    logger.info('Notifications retrieved by admin', {
+    logger.info("Notifications retrieved by admin", {
       total,
       page,
-      adminId: req.user._id
+      adminId: req.user._id,
     });
 
     res.json({
       notifications,
       total,
       page,
-      totalPages: Math.ceil(total / limit)
+      totalPages: Math.ceil(total / limit),
     });
   }),
 
   getNotificationDetail: asyncHandler(async (req, res) => {
     const notification = await Notifies.findById(req.params.id)
-      .populate('user', 'username avatar email fullname')
-      .populate('recipients', 'username avatar email fullname');
+      .populate("user", "username avatar email fullname")
+      .populate("recipients", "username avatar email fullname");
 
     if (!notification) {
       throw new NotFoundError("Notification");
     }
 
-    logger.info('Notification detail retrieved', {
+    logger.info("Notification detail retrieved", {
       notificationId: req.params.id,
-      adminId: req.user._id
+      adminId: req.user._id,
     });
 
     res.json({ notification });
@@ -448,12 +568,12 @@ const adminCtrl = {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
-    const status = req.query.status || 'pending';
+    const status = req.query.status || "pending";
     const priority = req.query.priority;
 
     const query = {
-      reportType: 'user',
-      status: status
+      reportType: "user",
+      status: status,
     };
 
     if (priority) {
@@ -461,10 +581,10 @@ const adminCtrl = {
     }
 
     const reports = await Reports.find(query)
-      .populate('reportedBy', 'username avatar email')
-      .populate('targetId', 'username avatar email fullname isBlocked')
-      .populate('reviewedBy', 'username avatar')
-      .sort('-priority -createdAt')
+      .populate("reportedBy", "username avatar email")
+      .populate("targetId", "username avatar email fullname isBlocked")
+      .populate("reviewedBy", "username avatar")
+      .sort("-priority -createdAt")
       .skip(skip)
       .limit(limit);
 
@@ -472,14 +592,14 @@ const adminCtrl = {
 
     const userReportsMap = new Map();
 
-    reports.forEach(report => {
+    reports.forEach((report) => {
       const userId = report.targetId._id.toString();
       if (!userReportsMap.has(userId)) {
         userReportsMap.set(userId, {
           user: report.targetId,
           reports: [],
           totalReports: 0,
-          highestPriority: 'low'
+          highestPriority: "low",
         });
       }
 
@@ -487,19 +607,22 @@ const adminCtrl = {
       userReport.reports.push(report);
       userReport.totalReports += 1;
 
-      const priorities = ['low', 'medium', 'high', 'critical'];
-      if (priorities.indexOf(report.priority) > priorities.indexOf(userReport.highestPriority)) {
+      const priorities = ["low", "medium", "high", "critical"];
+      if (
+        priorities.indexOf(report.priority) >
+        priorities.indexOf(userReport.highestPriority)
+      ) {
         userReport.highestPriority = report.priority;
       }
     });
 
     const reportedUsers = Array.from(userReportsMap.values());
 
-    logger.info('Reported users retrieved', {
+    logger.info("Reported users retrieved", {
       total: reportedUsers.length,
       status,
       priority,
-      adminId: req.user._id
+      adminId: req.user._id,
     });
 
     res.json({
@@ -508,9 +631,9 @@ const adminCtrl = {
       page,
       totalPages: Math.ceil(total / limit),
       pendingCount: await Reports.countDocuments({
-        reportType: 'user',
-        status: 'pending'
-      })
+        reportType: "user",
+        status: "pending",
+      }),
     });
   }),
 
@@ -523,88 +646,90 @@ const adminCtrl = {
     }
 
     const report = await Reports.findById(reportId)
-      .populate('targetId')
-      .populate('reportedBy', 'username email');
+      .populate("targetId")
+      .populate("reportedBy", "username email");
 
     if (!report) {
       throw new NotFoundError("Report");
     }
 
-    if (report.status !== 'pending' && report.status !== 'reviewing') {
-      return res.status(400).json({ msg: "This report has already been processed." });
+    if (report.status !== "pending" && report.status !== "reviewing") {
+      return res
+        .status(400)
+        .json({ msg: "This report has already been processed." });
     }
 
     await report.accept(req.user._id, actionTaken, adminNote);
 
-    if (report.reportType === 'post' && removeContent) {
+    if (report.reportType === "post" && removeContent) {
       const post = await Posts.findById(report.targetId);
       if (post) {
-        post.moderationStatus = 'removed';
+        post.moderationStatus = "removed";
         post.moderatedBy = req.user._id;
         post.moderatedAt = new Date();
         post.moderationNote = adminNote;
         await post.save();
 
-        if (actionTaken === 'content_removed') {
+        if (actionTaken === "content_removed") {
           await Posts.findByIdAndDelete(report.targetId);
           await Comments.deleteMany({ postId: report.targetId });
         }
       }
     }
 
-    if (report.reportType === 'comment' && removeContent) {
+    if (report.reportType === "comment" && removeContent) {
       const comment = await Comments.findById(report.targetId);
       if (comment) {
-        comment.moderationStatus = 'removed';
+        comment.moderationStatus = "removed";
         await comment.save();
 
-        if (actionTaken === 'content_removed') {
+        if (actionTaken === "content_removed") {
           await Comments.findByIdAndDelete(report.targetId);
         }
       }
     }
 
-    if (report.reportType === 'user' && blockUser) {
+    if (report.reportType === "user" && blockUser) {
       const user = await Users.findById(report.targetId);
       if (user) {
         user.isBlocked = true;
-        user.blockedReason = adminNote || 'Multiple reports received';
+        user.blockedReason = adminNote || "Multiple reports received";
         user.blockedByAdmin = req.user._id;
         user.blockedAt = new Date();
         await user.save();
       }
     }
 
-    if (report.reportType !== 'message') {
+    if (report.reportType !== "message") {
       await Reports.updateMany(
         {
           targetId: report.targetId,
           reportType: report.reportType,
-          status: 'pending'
+          status: "pending",
         },
         {
           $set: {
-            status: 'resolved',
+            status: "resolved",
             reviewedBy: req.user._id,
             reviewedAt: new Date(),
             adminNote: `Bulk resolved: ${adminNote}`,
-            isResolved: true
-          }
+            isResolved: true,
+          },
         }
       );
     }
 
-    logger.audit('Report accepted', req.user._id, {
+    logger.audit("Report accepted", req.user._id, {
       reportId,
       reportType: report.reportType,
       targetId: report.targetId,
-      actionTaken
+      actionTaken,
     });
 
     res.json({
       msg: "Report accepted successfully.",
       report,
-      actionTaken
+      actionTaken,
     });
   }),
 
@@ -613,31 +738,37 @@ const adminCtrl = {
     const { adminNote } = req.body;
 
     if (!adminNote || !adminNote.trim()) {
-      throw new ValidationError("Admin note is required when declining a report.");
+      throw new ValidationError(
+        "Admin note is required when declining a report."
+      );
     }
 
-    const report = await Reports.findById(reportId)
-      .populate('reportedBy', 'username email');
+    const report = await Reports.findById(reportId).populate(
+      "reportedBy",
+      "username email"
+    );
 
     if (!report) {
       throw new NotFoundError("Report");
     }
 
-    if (report.status !== 'pending' && report.status !== 'reviewing') {
-      return res.status(400).json({ msg: "This report has already been processed." });
+    if (report.status !== "pending" && report.status !== "reviewing") {
+      return res
+        .status(400)
+        .json({ msg: "This report has already been processed." });
     }
 
     await report.decline(req.user._id, adminNote);
 
-    logger.audit('Report declined', req.user._id, {
+    logger.audit("Report declined", req.user._id, {
       reportId,
       reportType: report.reportType,
-      targetId: report.targetId
+      targetId: report.targetId,
     });
 
     res.json({
       msg: "Report declined successfully.",
-      report
+      report,
     });
   }),
 
@@ -645,7 +776,7 @@ const adminCtrl = {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
-    const status = req.query.status || 'pending';
+    const status = req.query.status || "pending";
     const reportType = req.query.reportType;
     const priority = req.query.priority;
 
@@ -660,41 +791,62 @@ const adminCtrl = {
     }
 
     const reports = await Reports.find(query)
-      .populate('reportedBy', 'username avatar email')
-      .populate('reviewedBy', 'username avatar')
+      .populate("reportedBy", "username avatar email")
+      .populate("reviewedBy", "username avatar")
       .populate({
-        path: 'targetId',
-        select: 'content username email avatar images user'
+        path: "targetId",
+        select: "content username email avatar images user",
       })
-      .sort('-priority -createdAt')
+      .sort("-priority -createdAt")
       .skip(skip)
       .limit(limit);
 
     const total = await Reports.countDocuments(query);
 
     const statistics = {
-      totalPending: await Reports.countDocuments({ status: 'pending' }),
-      totalReviewing: await Reports.countDocuments({ status: 'reviewing' }),
-      totalAccepted: await Reports.countDocuments({ status: 'accepted' }),
-      totalDeclined: await Reports.countDocuments({ status: 'declined' }),
+      totalPending: await Reports.countDocuments({ status: "pending" }),
+      totalReviewing: await Reports.countDocuments({ status: "reviewing" }),
+      totalAccepted: await Reports.countDocuments({ status: "accepted" }),
+      totalDeclined: await Reports.countDocuments({ status: "declined" }),
       byType: {
-        post: await Reports.countDocuments({ reportType: 'post', status: 'pending' }),
-        comment: await Reports.countDocuments({ reportType: 'comment', status: 'pending' }),
-        user: await Reports.countDocuments({ reportType: 'user', status: 'pending' })
+        post: await Reports.countDocuments({
+          reportType: "post",
+          status: "pending",
+        }),
+        comment: await Reports.countDocuments({
+          reportType: "comment",
+          status: "pending",
+        }),
+        user: await Reports.countDocuments({
+          reportType: "user",
+          status: "pending",
+        }),
       },
       byPriority: {
-        critical: await Reports.countDocuments({ priority: 'critical', status: 'pending' }),
-        high: await Reports.countDocuments({ priority: 'high', status: 'pending' }),
-        medium: await Reports.countDocuments({ priority: 'medium', status: 'pending' }),
-        low: await Reports.countDocuments({ priority: 'low', status: 'pending' })
-      }
+        critical: await Reports.countDocuments({
+          priority: "critical",
+          status: "pending",
+        }),
+        high: await Reports.countDocuments({
+          priority: "high",
+          status: "pending",
+        }),
+        medium: await Reports.countDocuments({
+          priority: "medium",
+          status: "pending",
+        }),
+        low: await Reports.countDocuments({
+          priority: "low",
+          status: "pending",
+        }),
+      },
     };
 
-    logger.info('All reports retrieved', {
+    logger.info("All reports retrieved", {
       total,
       status,
       reportType,
-      adminId: req.user._id
+      adminId: req.user._id,
     });
 
     res.json({
@@ -702,7 +854,7 @@ const adminCtrl = {
       total,
       page,
       totalPages: Math.ceil(total / limit),
-      statistics
+      statistics,
     });
   }),
 
@@ -710,14 +862,14 @@ const adminCtrl = {
     const { reportId } = req.params;
 
     const report = await Reports.findById(reportId)
-      .populate('reportedBy', 'username avatar email fullname')
-      .populate('reviewedBy', 'username avatar email')
+      .populate("reportedBy", "username avatar email fullname")
+      .populate("reviewedBy", "username avatar email")
       .populate({
-        path: 'targetId',
+        path: "targetId",
         populate: {
-          path: 'user',
-          select: 'username avatar email fullname'
-        }
+          path: "user",
+          select: "username avatar email fullname",
+        },
       });
 
     if (!report) {
@@ -727,22 +879,22 @@ const adminCtrl = {
     const relatedReports = await Reports.find({
       targetId: report.targetId,
       reportType: report.reportType,
-      _id: { $ne: reportId }
+      _id: { $ne: reportId },
     })
-      .populate('reportedBy', 'username avatar')
-      .sort('-createdAt')
+      .populate("reportedBy", "username avatar")
+      .sort("-createdAt")
       .limit(10);
 
     const reporterHistory = await Reports.find({
-      reportedBy: report.reportedBy._id
+      reportedBy: report.reportedBy._id,
     })
-      .select('reportType status createdAt')
-      .sort('-createdAt')
+      .select("reportType status createdAt")
+      .sort("-createdAt")
       .limit(5);
 
-    logger.info('Report details retrieved', {
+    logger.info("Report details retrieved", {
       reportId,
-      adminId: req.user._id
+      adminId: req.user._id,
     });
 
     res.json({
@@ -751,8 +903,8 @@ const adminCtrl = {
       reporterHistory,
       statistics: {
         totalRelatedReports: relatedReports.length,
-        reporterTotalReports: reporterHistory.length
-      }
+        reporterTotalReports: reporterHistory.length,
+      },
     });
   }),
 
@@ -765,19 +917,21 @@ const adminCtrl = {
       throw new NotFoundError("Report");
     }
 
-    if (report.status !== 'pending') {
-      return res.status(400).json({ msg: "Only pending reports can be marked as reviewing." });
+    if (report.status !== "pending") {
+      return res
+        .status(400)
+        .json({ msg: "Only pending reports can be marked as reviewing." });
     }
 
     await report.markAsReviewing(req.user._id);
 
-    logger.audit('Report marked as reviewing', req.user._id, { reportId });
+    logger.audit("Report marked as reviewing", req.user._id, { reportId });
 
     res.json({
       msg: "Report marked as reviewing.",
-      report
+      report,
     });
-  })
+  }),
 };
 
 module.exports = adminCtrl;

@@ -4,77 +4,87 @@ const groupCtrl = require("../controllers/groupCtrl");
 const { validate } = require("../middleware/validate");
 const groupSchemas = require("../schemas/groupSchema");
 const validateObjectId = require("../middleware/validateObjectId");
-const { validatePagination, rateLimitByUser } = require("../middleware/validation");
+const {
+  validatePagination,
+  rateLimitByUser,
+} = require("../middleware/validation");
 
-router.post("/group", 
+router.post(
+  "/group",
   auth,
   rateLimitByUser(10, 60 * 60 * 1000),
   validate(groupSchemas.create),
   groupCtrl.createGroup
 );
 
-router.get("/groups", 
-  auth, 
-  groupCtrl.getUserGroups
-);
+router.get("/groups", auth, groupCtrl.getUserGroups);
 
-router.get("/group/:groupId", 
+router.get(
+  "/group/:groupId",
   auth,
-  validateObjectId('groupId'),
+  validateObjectId("groupId"),
   groupCtrl.getGroupDetails
 );
 
-router.post("/group/:groupId/message", 
+router.post(
+  "/group/:groupId/message",
   auth,
-  validateObjectId('groupId'),
+  validateObjectId("groupId"),
   rateLimitByUser(100, 60 * 1000),
   validate(groupSchemas.sendMessage),
   groupCtrl.sendGroupMessage
 );
 
-router.get("/group/:groupId/messages", 
+router.get(
+  "/group/:groupId/messages",
   auth,
-  validateObjectId('groupId'),
+  validateObjectId("groupId"),
   validatePagination,
   groupCtrl.getGroupMessages
 );
 
-router.post("/group/:groupId/members", 
+router.post(
+  "/group/:groupId/members",
   auth,
-  validateObjectId('groupId'),
+  validateObjectId("groupId"),
   validate(groupSchemas.addMembers),
   groupCtrl.addMembers
 );
 
-router.delete("/group/:groupId/member/:memberId", 
+router.delete(
+  "/group/:groupId/member/:memberId",
   auth,
-  validateObjectId('groupId'),
-  validateObjectId('memberId'),
+  validateObjectId("groupId"),
+  validateObjectId("memberId"),
   groupCtrl.removeMember
 );
 
-router.post("/group/:groupId/leave", 
+router.post(
+  "/group/:groupId/leave",
   auth,
-  validateObjectId('groupId'),
+  validateObjectId("groupId"),
   groupCtrl.leaveGroup
 );
 
-router.patch("/group/:groupId", 
+router.patch(
+  "/group/:groupId",
   auth,
-  validateObjectId('groupId'),
+  validateObjectId("groupId"),
   validate(groupSchemas.update),
   groupCtrl.updateGroupInfo
 );
 
-router.post("/group/message/:messageId/react", 
+router.post(
+  "/group/message/:messageId/react",
   auth,
-  validateObjectId('messageId'),
+  validateObjectId("messageId"),
   groupCtrl.reactToMessage
 );
 
-router.post("/group/:groupId/read", 
+router.post(
+  "/group/:groupId/read",
   auth,
-  validateObjectId('groupId'),
+  validateObjectId("groupId"),
   groupCtrl.markAsRead
 );
 

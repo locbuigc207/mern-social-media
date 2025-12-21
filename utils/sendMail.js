@@ -1,31 +1,33 @@
-const nodemailer = require('nodemailer');
+const nodemailer = require("nodemailer");
 
 const sendEmail = async (to, subject, html, retries = 3) => {
   for (let i = 0; i < retries; i++) {
     try {
       const transporter = nodemailer.createTransport({
-        service: 'gmail',
+        host: process.env.SMTP_HOST || 'smtp.gmail.com',
+        port: process.env.SMTP_PORT || 587,
+        secure: process.env.SMTP_PORT == 465, // true for 465, false for other ports
         auth: {
           user: process.env.EMAIL_USERNAME,
-          pass: process.env.EMAIL_PASSWORD
-        }
+          pass: process.env.EMAIL_PASSWORD,
+        },
       });
 
       const mailOptions = {
         from: process.env.EMAIL_USERNAME,
         to: to,
         subject: subject,
-        html: html
+        html: html,
       };
 
       const info = await transporter.sendMail(mailOptions);
       return info;
     } catch (error) {
       if (i === retries - 1) {
-        console.error('Error sending email after retries:', error);
+        console.error("Error sending email after retries:", error);
         throw error;
       }
-      await new Promise(res => setTimeout(res, 1000 * (i + 1)));
+      await new Promise((res) => setTimeout(res, 1000 * (i + 1)));
     }
   }
 };
@@ -165,5 +167,5 @@ module.exports = {
   sendEmail,
   getVerificationEmailTemplate,
   getPasswordResetTemplate,
-  getWelcomeEmailTemplate
+  getWelcomeEmailTemplate,
 };

@@ -2,22 +2,26 @@ const Users = require("../models/userModel");
 const Conversations = require("../models/conversationModel");
 const Messages = require("../models/messageModel");
 const { asyncHandler } = require("../middleware/errorHandler");
-const { ValidationError, NotFoundError, ConflictError } = require("../utils/AppError");
+const {
+  ValidationError,
+  NotFoundError,
+  ConflictError,
+} = require("../utils/AppError");
 
 const userCtrl = {
   searchUser: asyncHandler(async (req, res) => {
     const searchQuery = req.query.username
-      ? req.query.username.replace(/[$.]/g, '').trim()
-      : '';
-    
+      ? req.query.username.replace(/[$.]/g, "").trim()
+      : "";
+
     if (!searchQuery) {
       return res.json({ users: [] });
     }
 
     const users = await Users.find({
-      username: { $regex: searchQuery, $options: 'i' },
-      role: 'user',
-      isBlocked: false
+      username: { $regex: searchQuery, $options: "i" },
+      role: "user",
+      isBlocked: false,
     })
       .limit(10)
       .select("fullname username avatar");
@@ -26,12 +30,20 @@ const userCtrl = {
   }),
 
   getUser: asyncHandler(async (req, res) => {
-    const user = await Users.findById(req.params.id)
+    // Nếu route là /user/me thì lấy user hiện tại
+    const userId = req.params.id === 'me' || !req.params.id ? req.user._id : req.params.id;
+    
+    const user = await Users.findById(userId)
       .select("-password")
       .populate("followers following", "-password");
 
     if (!user) {
       throw new NotFoundError("User");
+    }
+
+    // Nếu là chính user hiện tại, trả về luôn
+    if (userId.toString() === req.user._id.toString()) {
+      return res.json({ user });
     }
 
     if (user.blockedUsers.includes(req.user._id)) {
@@ -74,18 +86,22 @@ const userCtrl = {
 
     res.json({ user: userData });
   }),
+  getCurrentUser: asyncHandler(async (req, res) => {
+    const user = await Users.findById(req.user._id)
+      .select("-password")
+      .populate("followers following", "avatar username fullname")
+      .populate("blockedUsers", "avatar username fullname");
 
+    if (!user) {
+      throw new NotFoundError("User not found");
+    }
+
+    res.json({ user });
+  }),
   updateUser: asyncHandler(async (req, res) => {
-    const {
-      avatar,
-      fullname,
-      mobile,
-      address,
-      story,
-      website,
-      gender,
-    } = req.body;
-    
+    const { avatar, fullname, mobile, address, story, website, gender } =
+      req.body;
+
     if (!fullname) {
       throw new ValidationError("Please add your full name.");
     }
@@ -110,7 +126,8 @@ const userCtrl = {
 
     const privacySettings = {};
 
-    if (profileVisibility) privacySettings.profileVisibility = profileVisibility;
+    if (profileVisibility)
+      privacySettings.profileVisibility = profileVisibility;
     if (whoCanMessage) privacySettings.whoCanMessage = whoCanMessage;
     if (whoCanComment) privacySettings.whoCanComment = whoCanComment;
     if (whoCanTag) privacySettings.whoCanTag = whoCanTag;
@@ -136,7 +153,6 @@ const userCtrl = {
     res.json({ privacySettings: user.privacySettings });
   }),
 
-
   blockUser: asyncHandler(async (req, res) => {
     const { id } = req.params;
 
@@ -156,32 +172,32 @@ const userCtrl = {
 
     await Users.findByIdAndUpdate(req.user._id, {
       $addToSet: { blockedUsers: id },
-      $pull: { 
-        following: id  
+      $pull: {
+        following: id,
       },
     });
 
     await Users.findByIdAndUpdate(id, {
       $addToSet: { blockedBy: req.user._id },
-      $pull: { 
-        followers: req.user._id,  
-        following: req.user._id   
+      $pull: {
+        followers: req.user._id,
+        following: req.user._id,
       },
     });
 
     await Conversations.deleteMany({
-      recipients: { $all: [req.user._id, id] }
+      recipients: { $all: [req.user._id, id] },
     });
 
     await Messages.updateMany(
       {
         $or: [
           { sender: req.user._id, recipient: id },
-          { sender: id, recipient: req.user._id }
-        ]
+          { sender: id, recipient: req.user._id },
+        ],
       },
       {
-        $addToSet: { deletedBy: { $each: [req.user._id, id] } }
+        $addToSet: { deletedBy: { $each: [req.user._id, id] } },
       }
     );
 
@@ -216,23 +232,23 @@ const userCtrl = {
     const currentUser = await Users.findById(req.user._id).select(
       "blockedUsers blockedBy"
     );
-    
+
     const isBlockedByMe = currentUser.blockedUsers.includes(id);
     const isBlockedByThem = currentUser.blockedBy.includes(id);
 
-    res.json({ 
+    res.json({
       isBlocked: isBlockedByMe,
-      isBlockedBy: isBlockedByThem
+      isBlockedBy: isBlockedByThem,
     });
   }),
 
   follow: asyncHandler(async (req, res) => {
     const targetUser = await Users.findById(req.params.id);
-    
+
     if (!targetUser) {
       throw new NotFoundError("User");
     }
-    
+
     if (targetUser.blockedUsers.includes(req.user._id)) {
       return res.status(403).json({ msg: "You cannot follow this user." });
     }
@@ -241,7 +257,7 @@ const userCtrl = {
       _id: req.params.id,
       followers: req.user._id,
     });
-    
+
     if (user.length > 0) {
       throw new ConflictError("You are already following this user.");
     }
@@ -301,8 +317,8 @@ const userCtrl = {
       {
         $match: {
           _id: { $nin: newArr },
-          role: "user", 
-          isBlocked: false, 
+          role: "user",
+          isBlocked: false,
         },
       },
       { $sample: { size: Number(num) } },
@@ -336,6 +352,18 @@ const userCtrl = {
       users,
       result: users.length,
     });
+  }),
+
+  getFriends: asyncHandler(async (req, res) => {
+    const user = await Users.findById(req.user._id)
+      .populate('following', 'fullname username avatar')
+      .select('following');
+
+    if (!user) {
+      throw new NotFoundError("User");
+    }
+
+    res.json({ friends: user.following });
   }),
 };
 

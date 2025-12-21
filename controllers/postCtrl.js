@@ -6,10 +6,17 @@ const Notifies = require("../models/notifyModel");
 const Hashtags = require("../models/hashtagModel");
 const mongoose = require("mongoose");
 const { uploadMultipleToCloudinary } = require("../services/cloudinaryService");
-const { processHashtags, removePostFromHashtags } = require("../services/hashtagService");
+const {
+  processHashtags,
+  removePostFromHashtags,
+} = require("../services/hashtagService");
 const logger = require("../utils/logger");
 const { asyncHandler } = require("../middleware/errorHandler");
-const { ValidationError, NotFoundError, AuthorizationError } = require("../utils/AppError");
+const {
+  ValidationError,
+  NotFoundError,
+  AuthorizationError,
+} = require("../utils/AppError");
 
 class APIfeatures {
   constructor(query, queryString) {
@@ -65,8 +72,14 @@ const postCtrl = {
       });
     }
 
-    if (!isDraft && images.length === 0) {
-      throw new ValidationError("Please add at least one photo or video.");
+    if (
+      !isDraft &&
+      images.length === 0 &&
+      (!content || content.trim().length === 0)
+    ) {
+      throw new ValidationError(
+        "Please add content or at least one photo/video."
+      );
     }
 
     if (status === "scheduled") {
@@ -246,7 +259,9 @@ const postCtrl = {
 
       if (post.images.length === 0) {
         await session.abortTransaction();
-        throw new ValidationError("Please add at least one image before publishing.");
+        throw new ValidationError(
+          "Please add at least one image before publishing."
+        );
       }
 
       post.status = "published";
@@ -481,10 +496,10 @@ const postCtrl = {
     const post = await Posts.findOneAndUpdate(
       {
         _id: req.params.id,
-        likes: { $ne: req.user._id }
+        likes: { $ne: req.user._id },
       },
       {
-        $addToSet: { likes: req.user._id }
+        $addToSet: { likes: req.user._id },
       },
       { new: true }
     );
@@ -492,16 +507,16 @@ const postCtrl = {
     if (!post) {
       const existingPost = await Posts.findById(req.params.id);
       if (!existingPost) {
-        throw new NotFoundError('Post');
+        throw new NotFoundError("Post");
       }
       return res.status(400).json({
-        msg: "You have already liked this post"
+        msg: "You have already liked this post",
       });
     }
 
     res.json({
       msg: "Post liked successfully.",
-      likesCount: post.likes.length
+      likesCount: post.likes.length,
     });
   }),
 
@@ -509,10 +524,10 @@ const postCtrl = {
     const post = await Posts.findOneAndUpdate(
       {
         _id: req.params.id,
-        likes: req.user._id
+        likes: req.user._id,
       },
       {
-        $pull: { likes: req.user._id }
+        $pull: { likes: req.user._id },
       },
       { new: true }
     );
@@ -520,16 +535,16 @@ const postCtrl = {
     if (!post) {
       const existingPost = await Posts.findById(req.params.id);
       if (!existingPost) {
-        throw new NotFoundError('Post');
+        throw new NotFoundError("Post");
       }
       return res.status(400).json({
-        msg: "You haven't liked this post"
+        msg: "You haven't liked this post",
       });
     }
 
     res.json({
       msg: "Post unliked successfully.",
-      likesCount: post.likes.length
+      likesCount: post.likes.length,
     });
   }),
 
@@ -602,17 +617,17 @@ const postCtrl = {
 
       if (!post) {
         await session.abortTransaction();
-        throw new NotFoundError('Post');
+        throw new NotFoundError("Post");
       }
 
       await Promise.all([
         Comments.deleteMany({ _id: { $in: post.comments } }).session(session),
         Reports.deleteMany({
           targetId: req.params.id,
-          reportType: 'post'
+          reportType: "post",
         }).session(session),
         Notifies.deleteMany({
-          id: req.params.id
+          id: req.params.id,
         }).session(session),
         Users.updateMany(
           { saved: req.params.id },
@@ -649,15 +664,27 @@ const postCtrl = {
     if (!reason) throw new ValidationError("Report reason is required.");
 
     const validReasons = [
-      "spam", "harassment", "hate_speech", "violence", "nudity",
-      "false_information", "scam", "copyright", "self_harm",
-      "terrorism", "child_exploitation", "other",
+      "spam",
+      "harassment",
+      "hate_speech",
+      "violence",
+      "nudity",
+      "false_information",
+      "scam",
+      "copyright",
+      "self_harm",
+      "terrorism",
+      "child_exploitation",
+      "other",
     ];
 
-    if (!validReasons.includes(reason)) throw new ValidationError("Invalid report reason.");
+    if (!validReasons.includes(reason))
+      throw new ValidationError("Invalid report reason.");
 
     if (!description || description.trim().length < 10) {
-      throw new ValidationError("Please provide a detailed description (at least 10 characters).");
+      throw new ValidationError(
+        "Please provide a detailed description (at least 10 characters)."
+      );
     }
 
     const existingReport = await Reports.findOne({
@@ -666,16 +693,24 @@ const postCtrl = {
       reportedBy: req.user._id,
     });
 
-    if (existingReport) throw new ValidationError("You have already reported this post.");
+    if (existingReport)
+      throw new ValidationError("You have already reported this post.");
 
     const post = await Posts.findById(req.params.id);
     if (!post) throw new NotFoundError("Post");
 
     const priorityMap = {
-      child_exploitation: "critical", terrorism: "critical", self_harm: "critical",
-      violence: "high", harassment: "high", hate_speech: "high",
-      nudity: "medium", scam: "medium", false_information: "medium",
-      spam: "low", other: "low"
+      child_exploitation: "critical",
+      terrorism: "critical",
+      self_harm: "critical",
+      violence: "high",
+      harassment: "high",
+      hate_speech: "high",
+      nudity: "medium",
+      scam: "medium",
+      false_information: "medium",
+      spam: "low",
+      other: "low",
     };
 
     const finalPriority = priority || priorityMap[reason] || "low";
@@ -691,13 +726,20 @@ const postCtrl = {
       status: "pending",
     });
 
-    await newReport.save();
-    post.reports.push(newReport._id);
-    await post.incrementReportCount();
+    await Posts.findByIdAndUpdate(req.params.id, {
+      $push: { reports: newReport._id },
+    });
+    if (typeof post.incrementReportCount === "function") {
+      await post.incrementReportCount();
+    }
 
     res.json({
       msg: "Post reported successfully.",
-      report: { _id: newReport._id, reason: newReport.reason, status: newReport.status },
+      report: {
+        _id: newReport._id,
+        reason: newReport.reason,
+        status: newReport.status,
+      },
     });
   }),
 
@@ -738,7 +780,10 @@ const postCtrl = {
   }),
 
   savePost: asyncHandler(async (req, res) => {
-    const user = await Users.findOne({ _id: req.user._id, saved: req.params.id });
+    const user = await Users.findOne({
+      _id: req.user._id,
+      saved: req.params.id,
+    });
     if (user) throw new ValidationError("You have already saved this post.");
 
     const save = await Users.findOneAndUpdate(

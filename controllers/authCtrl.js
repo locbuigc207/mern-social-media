@@ -62,21 +62,33 @@ const authCtrl = {
 
     try {
       await sendEmail(email, "Verify Your Email - Campus Connect", emailHtml);
+      
+      res.json({
+        msg: "Registration successful! Please check your email to verify your account.",
+        user: {
+          ...newUser._doc,
+          password: "",
+        },
+      });
     } catch (emailError) {
       console.error("Error sending verification email:", emailError);
+      
+      // Vẫn tạo user thành công nhưng cảnh báo về email
+      res.json({
+        msg: "Registration successful! However, we couldn't send the verification email. Please request a new verification email.",
+        emailError: true,
+        user: {
+          ...newUser._doc,
+          password: "",
+        },
+      });
     }
-
-    res.json({
-      msg: "Registration successful! Please check your email to verify your account.",
-      user: {
-        ...newUser._doc,
-        password: "",
-      },
-    });
   }),
 
   verifyEmail: asyncHandler(async (req, res) => {
     const { token } = req.params;
+
+    console.log('🔍 Verifying email with token:', token);
 
     const user = await Users.findOne({
       verificationToken: token,
@@ -84,13 +96,27 @@ const authCtrl = {
     });
 
     if (!user) {
-      throw new ValidationError("Verification token is invalid or has expired.");
+      // Kiểm tra xem có user nào với token này không (kể cả đã hết hạn)
+      const expiredUser = await Users.findOne({ verificationToken: token });
+      
+      if (expiredUser) {
+        console.log('⏰ Token found but expired');
+        throw new ValidationError("Verification token has expired. Please request a new verification email.");
+      } else {
+        // Có thể user đã verify rồi, kiểm tra bằng email từ session hoặc thông báo chung
+        console.log('❌ Token not found - User may have already verified or token is invalid');
+        throw new ValidationError("This verification link is invalid or has already been used. If you haven't verified your email yet, please request a new verification link.");
+      }
     }
+
+    console.log('✅ User found:', user.email);
 
     user.isVerified = true;
     user.verificationToken = undefined;
     user.verificationTokenExpires = undefined;
     await user.save();
+
+    console.log('✅ User verified successfully');
 
     const welcomeHtml = getWelcomeEmailTemplate(user.username);
     try {

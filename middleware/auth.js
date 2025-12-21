@@ -5,10 +5,15 @@ const logger = require('../utils/logger');
 
 const auth = async (req, res, next) => {
   try {
-    const token = req.header("Authorization");
+    let token = req.header("Authorization");
 
     if (!token) {
       throw new AuthenticationError("Authentication required. Please login.");
+    }
+
+    // Remove "Bearer " prefix if present
+    if (token.startsWith("Bearer ")) {
+      token = token.slice(7);
     }
 
     const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);

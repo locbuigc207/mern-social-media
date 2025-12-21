@@ -2,189 +2,176 @@ const router = require("express").Router();
 const auth = require("../middleware/auth").auth;
 const postCtrl = require("../controllers/postCtrl");
 const { uploadMultiple } = require("../middleware/upload");
-const { 
-  createPostLimiter, 
+const {
+  createPostLimiter,
   generalLimiter,
-  reportLimiter,      
-  interactionLimiter  
+  reportLimiter,
+  interactionLimiter,
 } = require("../middleware/rateLimiter");
-const { validate } = require('../middleware/validate');
-const postSchemas = require('../schemas/postSchema');
-const validateObjectId = require('../middleware/validateObjectId');
+const { validate } = require("../middleware/validate");
+const postSchemas = require("../schemas/postSchema");
+const validateObjectId = require("../middleware/validateObjectId");
 const { validatePagination } = require("../middleware/validation");
 
-router.post("/posts", 
-  auth, 
-  createPostLimiter, 
-  uploadMultiple, 
-  validate(postSchemas.create), 
+router.post(
+  "/posts",
+  auth,
+  createPostLimiter,
+  uploadMultiple,
+  validate(postSchemas.create),
   postCtrl.createPost
 );
 
-router.get("/posts", 
-  auth, 
-  validatePagination, 
-  generalLimiter, 
+router.get(
+  "/posts",
+  auth,
+  validatePagination,
+  generalLimiter,
   postCtrl.getPosts
 );
 
-router.patch("/post/:id", 
-  auth, 
-  validateObjectId('id'), 
-  uploadMultiple, 
-  validate(postSchemas.update), 
+router.patch(
+  "/post/:id",
+  auth,
+  validateObjectId("id"),
+  uploadMultiple,
+  validate(postSchemas.update),
   postCtrl.updatePost
 );
 
-router.get("/post/:id", 
-  auth, 
-  validateObjectId('id'), 
-  generalLimiter, 
+router.get(
+  "/post/:id",
+  auth,
+  validateObjectId("id"),
+  generalLimiter,
   postCtrl.getPost
 );
 
-router.delete("/post/:id", 
-  auth, 
-  validateObjectId('id'), 
-  postCtrl.deletePost
-);
+router.delete("/post/:id", auth, validateObjectId("id"), postCtrl.deletePost);
 
-router.get("/drafts", 
-  auth, 
-  validatePagination, 
-  postCtrl.getDraftPosts
-);
+router.get("/drafts", auth, validatePagination, postCtrl.getDraftPosts);
 
-router.post("/draft", 
-  auth, 
-  uploadMultiple, 
-  validate(postSchemas.create), 
+router.post(
+  "/draft",
+  auth,
+  uploadMultiple,
+  validate(postSchemas.create),
   postCtrl.saveDraft
 );
 
-router.patch("/draft/:id", 
-  auth, 
-  validateObjectId('id'), 
-  uploadMultiple, 
-  validate(postSchemas.update), 
+router.patch(
+  "/draft/:id",
+  auth,
+  validateObjectId("id"),
+  uploadMultiple,
+  validate(postSchemas.update),
   postCtrl.updateDraft
 );
 
-router.delete("/draft/:id", 
-  auth, 
-  validateObjectId('id'), 
-  postCtrl.deleteDraft
-);
+router.delete("/draft/:id", auth, validateObjectId("id"), postCtrl.deleteDraft);
 
-router.post("/draft/:id/publish", 
-  auth, 
-  validateObjectId('id'), 
+router.post(
+  "/draft/:id/publish",
+  auth,
+  validateObjectId("id"),
   postCtrl.publishDraft
 );
 
-router.get("/scheduled-posts", 
-  auth, 
-  validatePagination, 
+router.get(
+  "/scheduled-posts",
+  auth,
+  validatePagination,
   postCtrl.getScheduledPosts
 );
 
-router.post("/schedule-post", 
-  auth, 
-  createPostLimiter, 
-  uploadMultiple, 
-  validate(postSchemas.schedule), 
+router.post(
+  "/schedule-post",
+  auth,
+  createPostLimiter,
+  uploadMultiple,
+  validate(postSchemas.schedule),
   postCtrl.schedulePost
 );
 
-router.patch("/scheduled-post/:id", 
-  auth, 
-  validateObjectId('id'), 
-  uploadMultiple, 
+router.patch(
+  "/scheduled-post/:id",
+  auth,
+  validateObjectId("id"),
+  uploadMultiple,
   postCtrl.updateScheduledPost
 );
 
-router.post("/scheduled-post/:id/cancel", 
-  auth, 
-  validateObjectId('id'), 
+router.post(
+  "/scheduled-post/:id/cancel",
+  auth,
+  validateObjectId("id"),
   postCtrl.cancelScheduledPost
 );
 
-router.patch("/post/:id/like", 
-  auth, 
-  validateObjectId('id'), 
-  interactionLimiter,  
+router.patch(
+  "/post/:id/like",
+  auth,
+  validateObjectId("id"),
+  interactionLimiter,
   postCtrl.likePost
 );
 
-router.patch("/post/:id/unlike", 
-  auth, 
-  validateObjectId('id'), 
-  interactionLimiter,  
+router.patch(
+  "/post/:id/unlike",
+  auth,
+  validateObjectId("id"),
+  interactionLimiter,
   postCtrl.unLikePost
 );
 
-router.patch("/post/:id/report", 
-  auth, 
-  validateObjectId('id'), 
-  reportLimiter, 
-  validate(postSchemas.report), 
+router.patch(
+  "/post/:id/report",
+  auth,
+  validateObjectId("id"),
+  reportLimiter,
+  validate(postSchemas.report),
   postCtrl.reportPost
 );
 
-router.patch("/post/:id/hide", 
-  auth, 
-  validateObjectId('id'), 
-  validate(postSchemas.hide), 
+router.patch(
+  "/post/:id/hide",
+  auth,
+  validateObjectId("id"),
+  validate(postSchemas.hide),
   postCtrl.hidePost
 );
 
-router.patch("/post/:id/unhide", 
-  auth, 
-  validateObjectId('id'), 
+router.patch(
+  "/post/:id/unhide",
+  auth,
+  validateObjectId("id"),
   postCtrl.unhidePost
 );
 
-router.get("/hidden-posts", 
-  auth, 
-  validatePagination, 
-  postCtrl.getHiddenPosts
-);
+router.get("/hidden-posts", auth, validatePagination, postCtrl.getHiddenPosts);
 
-router.post("/unhide-all-posts", 
-  auth, 
-  postCtrl.unhideAllPosts
-);
+router.post("/unhide-all-posts", auth, postCtrl.unhideAllPosts);
 
-router.get("/user_posts/:id", 
-  auth, 
-  validateObjectId('id'), 
-  validatePagination, 
-  generalLimiter, 
+router.get(
+  "/user_posts/:id",
+  auth,
+  validateObjectId("id"),
+  validatePagination,
+  generalLimiter,
   postCtrl.getUserPosts
 );
 
-router.get("/post_discover", 
-  auth, 
-  generalLimiter, 
-  postCtrl.getPostDiscover
-);
+router.get("/post_discover", auth, generalLimiter, postCtrl.getPostDiscover);
 
-router.patch("/savePost/:id", 
-  auth, 
-  validateObjectId('id'), 
-  postCtrl.savePost
-);
+router.patch("/savePost/:id", auth, validateObjectId("id"), postCtrl.savePost);
 
-router.patch("/unSavePost/:id", 
-  auth, 
-  validateObjectId('id'), 
+router.patch(
+  "/unSavePost/:id",
+  auth,
+  validateObjectId("id"),
   postCtrl.unSavePost
 );
 
-router.get("/getSavePosts", 
-  auth, 
-  validatePagination, 
-  postCtrl.getSavePost
-);
+router.get("/getSavePosts", auth, validatePagination, postCtrl.getSavePost);
 
 module.exports = router;

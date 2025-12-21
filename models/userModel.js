@@ -118,8 +118,8 @@ const userSchema = new mongoose.Schema(
     previousResetTokens: [
       {
         token: String,
-        invalidatedAt: Date
-      }
+        invalidatedAt: Date,
+      },
     ],
     privacySettings: {
       profileVisibility: {
@@ -176,9 +176,9 @@ userSchema.index({ blockedUsers: 1 });
 userSchema.index({ blockedBy: 1 });
 userSchema.index({ isVerified: 1, isBlocked: 1 });
 
-userSchema.index({ username: 'text', fullname: 'text', email: 'text' });
+userSchema.index({ username: "text", fullname: "text", email: "text" });
 
-userSchema.methods.canResetPassword = function() {
+userSchema.methods.canResetPassword = function () {
   if (this.resetAttempts >= 5) {
     const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
     if (this.lastResetAttempt && this.lastResetAttempt > oneHourAgo) {
@@ -189,23 +189,23 @@ userSchema.methods.canResetPassword = function() {
   return true;
 };
 
-userSchema.methods.incrementResetAttempts = async function() {
+userSchema.methods.incrementResetAttempts = async function () {
   this.resetAttempts += 1;
   this.lastResetAttempt = new Date();
   await this.save();
 };
 
-userSchema.methods.resetPasswordAttempts = async function() {
+userSchema.methods.resetPasswordAttempts = async function () {
   this.resetAttempts = 0;
   this.lastResetAttempt = undefined;
   await this.save();
 };
 
-userSchema.pre('save', function(next) {
-  if (this.isModified('email')) {
+userSchema.pre("save", function (next) {
+  if (this.isModified("email")) {
     this.email = this.email.toLowerCase();
   }
-  if (this.isModified('username')) {
+  if (this.isModified("username")) {
     this.username = this.username.toLowerCase();
   }
   next();
