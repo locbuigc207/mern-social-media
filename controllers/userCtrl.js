@@ -18,10 +18,20 @@ const userCtrl = {
       return res.json({ users: [] });
     }
 
+    const currentUser = await Users.findById(req.user._id)
+      .select("blockedUsers blockedBy");
+
+    const excludedUserIds = [
+      req.user._id,
+      ...currentUser.blockedUsers,
+      ...currentUser.blockedBy
+    ];
+
     const users = await Users.find({
       username: { $regex: searchQuery, $options: "i" },
       role: "user",
       isBlocked: false,
+      _id: { $nin: excludedUserIds }
     })
       .limit(10)
       .select("fullname username avatar");
@@ -30,7 +40,6 @@ const userCtrl = {
   }),
 
   getUser: asyncHandler(async (req, res) => {
-    // Nếu route là /user/me thì lấy user hiện tại
     const userId = req.params.id === 'me' || !req.params.id ? req.user._id : req.params.id;
     
     const user = await Users.findById(userId)
@@ -41,28 +50,39 @@ const userCtrl = {
       throw new NotFoundError("User");
     }
 
-    // Nếu là chính user hiện tại, trả về luôn
     if (userId.toString() === req.user._id.toString()) {
       return res.json({ user });
     }
 
-    if (user.blockedUsers.includes(req.user._id)) {
-      return res.status(403).json({ msg: "You are blocked by this user." });
+    const currentUser = await Users.findById(req.user._id)
+      .select("blockedUsers blockedBy");
+
+    if (currentUser.blockedBy.includes(userId)) {
+      return res.status(403).json({ 
+        msg: "This user is not available.",
+        isBlocked: true 
+      });
+    }
+
+    if (currentUser.blockedUsers.includes(userId)) {
+      return res.json({
+        user: {
+          _id: user._id,
+          username: user.username,
+          fullname: user.fullname,
+          avatar: user.avatar,
+          isBlockedByYou: true
+        },
+        message: "You have blocked this user"
+      });
     }
 
     if (user.privacySettings.profileVisibility === "private") {
       const isFollowing = user.followers.some(
         (follower) => follower._id.toString() === req.user._id.toString()
       );
-      const isFollower = user.following.some(
-        (following) => following._id.toString() === req.user._id.toString()
-      );
 
-      if (
-        !isFollowing &&
-        !isFollower &&
-        user._id.toString() !== req.user._id.toString()
-      ) {
+      if (!isFollowing) {
         return res.json({
           user: {
             _id: user._id,
@@ -86,6 +106,7 @@ const userCtrl = {
 
     res.json({ user: userData });
   }),
+
   getCurrentUser: asyncHandler(async (req, res) => {
     const user = await Users.findById(req.user._id)
       .select("-password")
@@ -98,6 +119,7 @@ const userCtrl = {
 
     res.json({ user });
   }),
+
   updateUser: asyncHandler(async (req, res) => {
     const { avatar, fullname, mobile, address, story, website, gender } =
       req.body;
@@ -106,9 +128,33 @@ const userCtrl = {
       throw new ValidationError("Please add your full name.");
     }
 
+    if (fullname.length > 25) {
+      throw new ValidationError("Full name cannot exceed 25 characters.");
+    }
+
+    if (story && story.length > 200) {
+      throw new ValidationError("Bio cannot exceed 200 characters.");
+    }
+
+    if (website && website.trim()) {
+      try {
+        new URL(website);
+      } catch (e) {
+        throw new ValidationError("Please enter a valid website URL.");
+      }
+    }
+
     await Users.findOneAndUpdate(
       { _id: req.user._id },
-      { avatar, fullname, mobile, address, story, website, gender }
+      { 
+        avatar, 
+        fullname: fullname.trim(), 
+        mobile, 
+        address, 
+        story: story ? story.trim() : "", 
+        website: website ? website.trim() : "", 
+        gender 
+      }
     );
 
     res.json({ msg: "Profile updated successfully." });
@@ -170,42 +216,68 @@ const userCtrl = {
       throw new ConflictError("User is already blocked.");
     }
 
-    await Users.findByIdAndUpdate(req.user._id, {
-      $addToSet: { blockedUsers: id },
-      $pull: {
-        following: id,
-      },
-    });
+    const session = await require("mongoose").startSession();
+    session.startTransaction();
 
-    await Users.findByIdAndUpdate(id, {
-      $addToSet: { blockedBy: req.user._id },
-      $pull: {
-        followers: req.user._id,
-        following: req.user._id,
-      },
-    });
+    try {
+      await Users.findByIdAndUpdate(
+        req.user._id,
+        {
+          $addToSet: { blockedUsers: id },
+          $pull: {
+            following: id,
+            followers: id 
+          },
+        },
+        { session }
+      );
 
-    await Conversations.deleteMany({
-      recipients: { $all: [req.user._id, id] },
-    });
+      await Users.findByIdAndUpdate(
+        id,
+        {
+          $addToSet: { blockedBy: req.user._id },
+          $pull: {
+            followers: req.user._id,
+            following: req.user._id,
+          },
+        },
+        { session }
+      );
 
-    await Messages.updateMany(
-      {
-        $or: [
-          { sender: req.user._id, recipient: id },
-          { sender: id, recipient: req.user._id },
-        ],
-      },
-      {
-        $addToSet: { deletedBy: { $each: [req.user._id, id] } },
-      }
-    );
+      await Conversations.deleteMany({
+        recipients: { $all: [req.user._id, id] },
+      }).session(session);
 
-    res.json({ msg: "User blocked successfully." });
+      await Messages.updateMany(
+        {
+          $or: [
+            { sender: req.user._id, recipient: id },
+            { sender: id, recipient: req.user._id },
+          ],
+        },
+        {
+          $addToSet: { deletedBy: { $each: [req.user._id, id] } },
+        },
+        { session }
+      );
+
+      await session.commitTransaction();
+      res.json({ msg: "User blocked successfully." });
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
+    }
   }),
 
   unblockUser: asyncHandler(async (req, res) => {
     const { id } = req.params;
+
+    const currentUser = await Users.findById(req.user._id);
+    if (!currentUser.blockedUsers.includes(id)) {
+      throw new ValidationError("User is not blocked.");
+    }
 
     await Users.findByIdAndUpdate(req.user._id, {
       $pull: { blockedUsers: id },
@@ -249,54 +321,81 @@ const userCtrl = {
       throw new NotFoundError("User");
     }
 
-    if (targetUser.blockedUsers.includes(req.user._id)) {
+    const currentUser = await Users.findById(req.user._id)
+      .select("blockedUsers blockedBy following");
+
+    if (currentUser.blockedBy.includes(req.params.id) || 
+        currentUser.blockedUsers.includes(req.params.id)) {
       return res.status(403).json({ msg: "You cannot follow this user." });
     }
 
-    const user = await Users.find({
-      _id: req.params.id,
-      followers: req.user._id,
-    });
-
-    if (user.length > 0) {
+    if (currentUser.following.includes(req.params.id)) {
       throw new ConflictError("You are already following this user.");
     }
 
-    const newUser = await Users.findOneAndUpdate(
-      { _id: req.params.id },
-      {
-        $push: {
-          followers: req.user._id,
+    const session = await require("mongoose").startSession();
+    session.startTransaction();
+
+    try {
+      const newUser = await Users.findOneAndUpdate(
+        { _id: req.params.id },
+        {
+          $addToSet: {
+            followers: req.user._id,
+          },
         },
-      },
-      { new: true }
-    ).populate("followers following", "-password");
+        { new: true, session }
+      ).populate("followers following", "-password");
 
-    await Users.findOneAndUpdate(
-      { _id: req.user._id },
-      { $push: { following: req.params.id } },
-      { new: true }
-    );
+      await Users.findOneAndUpdate(
+        { _id: req.user._id },
+        { $addToSet: { following: req.params.id } },
+        { new: true, session }
+      );
 
-    res.json({ newUser });
+      await session.commitTransaction();
+      res.json({ newUser });
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
+    }
   }),
 
   unfollow: asyncHandler(async (req, res) => {
-    const newUser = await Users.findOneAndUpdate(
-      { _id: req.params.id },
-      {
-        $pull: { followers: req.user._id },
-      },
-      { new: true }
-    ).populate("followers following", "-password");
+    const currentUser = await Users.findById(req.user._id).select("following");
 
-    await Users.findOneAndUpdate(
-      { _id: req.user._id },
-      { $pull: { following: req.params.id } },
-      { new: true }
-    );
+    if (!currentUser.following.includes(req.params.id)) {
+      throw new ValidationError("You are not following this user.");
+    }
 
-    res.json({ newUser });
+    const session = await require("mongoose").startSession();
+    session.startTransaction();
+
+    try {
+      const newUser = await Users.findOneAndUpdate(
+        { _id: req.params.id },
+        {
+          $pull: { followers: req.user._id },
+        },
+        { new: true, session }
+      ).populate("followers following", "-password");
+
+      await Users.findOneAndUpdate(
+        { _id: req.user._id },
+        { $pull: { following: req.params.id } },
+        { new: true, session }
+      );
+
+      await session.commitTransaction();
+      res.json({ newUser });
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
+    }
   }),
 
   suggestionsUser: asyncHandler(async (req, res) => {

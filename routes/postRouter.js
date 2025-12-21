@@ -174,4 +174,53 @@ router.patch(
 
 router.get("/getSavePosts", auth, validatePagination, postCtrl.getSavePost);
 
+router.post(
+  "/post/:postId/share",
+  auth,
+  validateObjectId("postId"),
+  interactionLimiter,
+  validate(postSchemas.share),
+  postCtrl.sharePost
+);
+
+router.delete(
+  "/post/:postId/unshare",
+  auth,
+  validateObjectId("postId"),
+  postCtrl.unsharePost
+);
+
+router.get(
+  "/post/:postId/shares",
+  auth,
+  validateObjectId("postId"),
+  validatePagination,
+  generalLimiter,
+  postCtrl.getPostShares
+);
+
+router.get(
+  "/user/:userId/shares",
+  auth,
+  validateObjectId("userId"),
+  validatePagination,
+  generalLimiter,
+  postCtrl.getUserShares
+);
+
+router.get(
+  "/posts/trending/most-shared",
+  auth,
+  generalLimiter,
+  postCtrl.getMostSharedPosts
+);
+
+router.get(
+  "/post/:postId/check-shared",
+  auth,
+  validateObjectId("postId"),
+  generalLimiter,
+  postCtrl.checkIfShared
+);
+
 module.exports = router;

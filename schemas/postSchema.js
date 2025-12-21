@@ -54,6 +54,12 @@ const postSchemas = {
     content: Joi.string().max(5000).allow('').optional(),
     images: Joi.array().min(1).required(),
     scheduledDate: Joi.date().greater('now').required()
+  }),
+
+  share: Joi.object({
+    shareCaption: Joi.string().max(5000).allow('').optional().messages({
+      'string.max': 'Share caption cannot exceed 5000 characters'
+    })
   })
 };
 

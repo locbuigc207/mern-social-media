@@ -72,14 +72,12 @@ const postCtrl = {
       });
     }
 
-    if (
-      !isDraft &&
-      images.length === 0 &&
-      (!content || content.trim().length === 0)
-    ) {
-      throw new ValidationError(
-        "Please add content or at least one photo/video."
-      );
+    if (!isDraft && status === "published") {
+      if (images.length === 0 && (!content || content.trim().length === 0)) {
+        throw new ValidationError(
+          "Please add content or at least one photo/video."
+        );
+      }
     }
 
     if (status === "scheduled") {
@@ -90,6 +88,10 @@ const postCtrl = {
       const scheduleDate = new Date(scheduledDate);
       if (scheduleDate <= new Date()) {
         throw new ValidationError("Scheduled date must be in the future.");
+      }
+
+      if (images.length === 0) {
+        throw new ValidationError("Scheduled posts must have at least one image.");
       }
     }
 
@@ -144,20 +146,32 @@ const postCtrl = {
   }),
 
   getPosts: asyncHandler(async (req, res) => {
-    const features = new APIfeatures(
-      Posts.find({
-        user: [...req.user.following, req.user._id],
-        status: "published",
-        isDraft: false,
-        isHidden: false,
-        hiddenBy: { $ne: req.user._id },
-        moderationStatus: { $ne: "removed" },
-      }),
-      req.query
-    ).paginating();
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 9;
+    const skip = (page - 1) * limit;
 
-    const posts = await features.query
+    const currentUser = await Users.findById(req.user._id)
+      .select("blockedUsers blockedBy following");
+
+    const excludedUserIds = [
+      ...currentUser.blockedUsers,
+      ...currentUser.blockedBy
+    ];
+
+    const posts = await Posts.find({
+      user: { 
+        $in: [...currentUser.following, req.user._id],
+        $nin: excludedUserIds 
+      },
+      status: "published",
+      isDraft: false,
+      isHidden: false,
+      hiddenBy: { $ne: req.user._id },
+      moderationStatus: { $ne: "removed" },
+    })
       .sort("-createdAt")
+      .skip(skip)
+      .limit(limit)
       .populate("user", "avatar username fullname")
       .populate({
         path: "comments",
@@ -166,6 +180,13 @@ const postCtrl = {
           path: "user",
           select: "avatar username",
         },
+      })
+      .populate({
+        path: "originalPost",
+        populate: {
+          path: "user",
+          select: "username avatar fullname"
+        }
       })
       .lean();
 
@@ -241,7 +262,6 @@ const postCtrl = {
 
   publishDraft: asyncHandler(async (req, res) => {
     const { id } = req.params;
-
     const session = await mongoose.startSession();
     session.startTransaction();
 
@@ -323,7 +343,6 @@ const postCtrl = {
 
   deleteDraft: asyncHandler(async (req, res) => {
     const { id } = req.params;
-
     const draft = await Posts.findOneAndDelete({
       _id: id,
       user: req.user._id,
@@ -333,7 +352,6 @@ const postCtrl = {
     if (!draft) {
       throw new NotFoundError("Draft not found.");
     }
-
     res.json({ msg: "Draft deleted successfully." });
   }),
 
@@ -461,13 +479,23 @@ const postCtrl = {
       throw new AuthorizationError("Unauthorized.");
     }
 
+    if (existingPost.isShared) {
+      throw new ValidationError("Cannot edit shared posts. You can only update the share caption.");
+    }
+
     const existingImages = JSON.parse(req.body.existingImages || "[]");
     const finalImages = [...existingImages, ...images];
+
+    if (existingPost.status === "published" && !existingPost.isDraft) {
+      if (finalImages.length === 0 && (!content || content.trim().length === 0)) {
+        throw new ValidationError("Post must have content or at least one image.");
+      }
+    }
 
     const post = await Posts.findByIdAndUpdate(
       req.params.id,
       {
-        content: content || existingPost.content,
+        content: content !== undefined ? content : existingPost.content,
         images: finalImages,
       },
       { new: true }
@@ -497,6 +525,8 @@ const postCtrl = {
       {
         _id: req.params.id,
         likes: { $ne: req.user._id },
+        status: "published",
+        moderationStatus: { $ne: "removed" }
       },
       {
         $addToSet: { likes: req.user._id },
@@ -509,6 +539,11 @@ const postCtrl = {
       if (!existingPost) {
         throw new NotFoundError("Post");
       }
+      
+      if (existingPost.moderationStatus === "removed") {
+        throw new ValidationError("This post has been removed.");
+      }
+      
       return res.status(400).json({
         msg: "You have already liked this post",
       });
@@ -574,10 +609,22 @@ const postCtrl = {
           path: "user likes ",
           select: "-password",
         },
+      })
+      .populate({
+        path: "originalPost",
+        populate: {
+          path: "user",
+          select: "username avatar fullname"
+        }
       });
 
     if (!post) {
       throw new NotFoundError("Post");
+    }
+
+    const postOwner = await Users.findById(post.user._id).select("blockedUsers");
+    if (postOwner.blockedUsers.includes(req.user._id)) {
+      throw new AuthorizationError("You cannot view this post.");
     }
 
     res.json({ post });
@@ -620,23 +667,47 @@ const postCtrl = {
         throw new NotFoundError("Post");
       }
 
-      await Promise.all([
-        Comments.deleteMany({ _id: { $in: post.comments } }).session(session),
-        Reports.deleteMany({
-          targetId: req.params.id,
-          reportType: "post",
-        }).session(session),
-        Notifies.deleteMany({
-          id: req.params.id,
-        }).session(session),
-        Users.updateMany(
-          { saved: req.params.id },
-          { $pull: { saved: req.params.id } }
-        ).session(session),
-      ]);
+      if (post.isShared && post.originalPost) {
+        const originalPost = await Posts.findById(post.originalPost).session(session);
+        if (originalPost) {
+          originalPost.shares = originalPost.shares.filter(
+            id => id.toString() !== req.params.id
+          );
+          await originalPost.decrementShareCount();
+          await originalPost.save({ session });
+        }
+      }
+
+      if (post.shareCount > 0 && post.shares.length > 0) {
+        await Posts.deleteMany({
+          _id: { $in: post.shares }
+        }).session(session);
+      }
+
+      await Comments.deleteMany({ 
+        _id: { $in: post.comments } 
+      }).session(session);
+
+      await Reports.deleteMany({
+        targetId: req.params.id,
+        reportType: "post",
+      }).session(session);
+
+      await Notifies.deleteMany({
+        id: req.params.id,
+      }).session(session);
+
+      await Users.updateMany(
+        { saved: req.params.id },
+        { $pull: { saved: req.params.id } }
+      ).session(session);
 
       if (post.content) {
         await removePostFromHashtags(req.params.id, post.content, session);
+      }
+
+      if (post.isShared && post.shareCaption) {
+        await removePostFromHashtags(req.params.id, post.shareCaption, session);
       }
 
       await Posts.findByIdAndDelete(req.params.id).session(session);
@@ -664,18 +735,9 @@ const postCtrl = {
     if (!reason) throw new ValidationError("Report reason is required.");
 
     const validReasons = [
-      "spam",
-      "harassment",
-      "hate_speech",
-      "violence",
-      "nudity",
-      "false_information",
-      "scam",
-      "copyright",
-      "self_harm",
-      "terrorism",
-      "child_exploitation",
-      "other",
+      "spam", "harassment", "hate_speech", "violence", "nudity",
+      "false_information", "scam", "copyright", "self_harm",
+      "terrorism", "child_exploitation", "other",
     ];
 
     if (!validReasons.includes(reason))
@@ -862,6 +924,321 @@ const postCtrl = {
     res.json({
       msg: `Successfully unhidden ${result.modifiedCount} post(s).`,
       count: result.modifiedCount,
+    });
+  }),
+
+  sharePost: asyncHandler(async (req, res) => {
+    const { postId } = req.params;
+    const { shareCaption } = req.body;
+
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const originalPost = await Posts.findById(postId).session(session);
+
+      if (!originalPost) {
+        await session.abortTransaction();
+        throw new NotFoundError("Post");
+      }
+
+      if (!originalPost.canBeShared()) {
+        await session.abortTransaction();
+        throw new ValidationError("This post cannot be shared.");
+      }
+
+      const existingShare = await Posts.findOne({
+        user: req.user._id,
+        originalPost: postId,
+        isShared: true,
+        status: "published",
+      }).session(session);
+
+      if (existingShare) {
+        await session.abortTransaction();
+        return res.status(400).json({
+          msg: "You have already shared this post.",
+          sharedPost: existingShare,
+        });
+      }
+
+      const originalPostOwner = await Users.findById(originalPost.user).session(
+        session
+      );
+
+      if (originalPostOwner.blockedUsers.includes(req.user._id)) {
+        await session.abortTransaction();
+        throw new AuthorizationError("You cannot share this post.");
+      }
+
+      const sharedPost = new Posts({
+        content: originalPost.content,
+        images: originalPost.images,
+        user: req.user._id,
+        isShared: true,
+        originalPost: postId,
+        shareCaption: shareCaption || "",
+        status: "published",
+        publishedAt: new Date(),
+      });
+
+      await sharedPost.save({ session });
+
+      await originalPost.incrementShareCount();
+
+      originalPost.shares.push(sharedPost._id);
+      await originalPost.save({ session });
+
+      if (shareCaption) {
+        await processHashtags(sharedPost._id, shareCaption, session);
+      }
+
+      if (originalPost.user.toString() !== req.user._id.toString()) {
+        const notification = new Notifies({
+          id: sharedPost._id,
+          user: req.user._id,
+          recipients: [originalPost.user],
+          url: `/post/${sharedPost._id}`,
+          text: "shared your post",
+          content: shareCaption || originalPost.content,
+          image: originalPost.images[0] || "",
+        });
+
+        await notification.save({ session });
+      }
+
+      await session.commitTransaction();
+
+      const populatedShare = await Posts.findById(sharedPost._id)
+        .populate("user", "username avatar fullname followers")
+        .populate({
+          path: "originalPost",
+          populate: {
+            path: "user",
+            select: "username avatar fullname",
+          },
+        });
+
+      logger.audit("Post shared", req.user._id, {
+        sharedPostId: sharedPost._id,
+        originalPostId: postId,
+      });
+
+      res.json({
+        msg: "Post shared successfully!",
+        sharedPost: populatedShare,
+      });
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
+    }
+  }),
+
+  unsharePost: asyncHandler(async (req, res) => {
+    const { postId } = req.params;
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const sharedPost = await Posts.findOne({
+        _id: postId,
+        user: req.user._id,
+        isShared: true,
+      }).session(session);
+
+      if (!sharedPost) {
+        await session.abortTransaction();
+        throw new NotFoundError("Shared post");
+      }
+
+      const originalPostId = sharedPost.originalPost;
+
+      await Comments.deleteMany({
+        _id: { $in: sharedPost.comments },
+      }).session(session);
+
+      if (sharedPost.shareCaption) {
+        await removePostFromHashtags(
+          sharedPost._id,
+          sharedPost.shareCaption,
+          session
+        );
+      }
+
+      await Notifies.deleteMany({
+        id: sharedPost._id,
+      }).session(session);
+
+      await Users.updateMany(
+        { saved: sharedPost._id },
+        { $pull: { saved: sharedPost._id } }
+      ).session(session);
+
+      const originalPost = await Posts.findById(originalPostId).session(
+        session
+      );
+      if (originalPost) {
+        originalPost.shares = originalPost.shares.filter(
+          (id) => id.toString() !== postId
+        );
+        await originalPost.decrementShareCount();
+        await originalPost.save({ session });
+      }
+
+      await Posts.findByIdAndDelete(postId).session(session);
+
+      await session.commitTransaction();
+
+      logger.audit("Post unshared", req.user._id, {
+        sharedPostId: postId,
+        originalPostId,
+      });
+
+      res.json({
+        msg: "Post unshared successfully.",
+      });
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
+    }
+  }),
+
+  getPostShares: asyncHandler(async (req, res) => {
+    const { postId } = req.params;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    const originalPost = await Posts.findById(postId);
+
+    if (!originalPost) {
+      throw new NotFoundError("Post");
+    }
+
+    const shares = await Posts.find({
+      originalPost: postId,
+      isShared: true,
+      status: "published",
+      isDraft: false,
+    })
+      .populate("user", "username avatar fullname")
+      .populate({
+        path: "originalPost",
+        populate: {
+          path: "user",
+          select: "username avatar fullname",
+        },
+      })
+      .sort("-createdAt")
+      .skip(skip)
+      .limit(limit);
+
+    const total = await Posts.countDocuments({
+      originalPost: postId,
+      isShared: true,
+      status: "published",
+      isDraft: false,
+    });
+
+    logger.info("Post shares retrieved", {
+      postId,
+      sharesCount: shares.length,
+      userId: req.user._id,
+    });
+
+    res.json({
+      shares,
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
+      shareCount: originalPost.shareCount,
+    });
+  }),
+
+  getUserShares: asyncHandler(async (req, res) => {
+    const { userId } = req.params;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    const shares = await Posts.find({
+      user: userId,
+      isShared: true,
+      status: "published",
+      isDraft: false,
+    })
+      .populate("user", "username avatar fullname")
+      .populate({
+        path: "originalPost",
+        populate: {
+          path: "user",
+          select: "username avatar fullname",
+        },
+      })
+      .sort("-createdAt")
+      .skip(skip)
+      .limit(limit);
+
+    const total = await Posts.countDocuments({
+      user: userId,
+      isShared: true,
+      status: "published",
+      isDraft: false,
+    });
+
+    res.json({
+      shares,
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
+    });
+  }),
+
+  getMostSharedPosts: asyncHandler(async (req, res) => {
+    const limit = parseInt(req.query.limit) || 10;
+    const timeRange = req.query.timeRange; 
+
+    let timeRangeMs = null;
+    if (timeRange === "day") {
+      timeRangeMs = 24 * 60 * 60 * 1000;
+    } else if (timeRange === "week") {
+      timeRangeMs = 7 * 24 * 60 * 60 * 1000;
+    } else if (timeRange === "month") {
+      timeRangeMs = 30 * 24 * 60 * 60 * 1000;
+    }
+
+    const mostSharedPosts = await Posts.getMostShared(limit, timeRangeMs);
+
+    logger.info("Most shared posts retrieved", {
+      count: mostSharedPosts.length,
+      timeRange: timeRange || "all",
+      userId: req.user._id,
+    });
+
+    res.json({
+      posts: mostSharedPosts,
+      count: mostSharedPosts.length,
+      timeRange: timeRange || "all",
+    });
+  }),
+
+  checkIfShared: asyncHandler(async (req, res) => {
+    const { postId } = req.params;
+
+    const sharedPost = await Posts.findOne({
+      user: req.user._id,
+      originalPost: postId,
+      isShared: true,
+      status: "published",
+    }).select("_id createdAt");
+
+    res.json({
+      isShared: !!sharedPost,
+      sharedPost: sharedPost || null,
     });
   }),
 };

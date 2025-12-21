@@ -26,6 +26,33 @@ const postSchema = new Schema(
       required: true,
       index: true,
     },
+    
+    isShared: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    originalPost: {
+      type: mongoose.Types.ObjectId,
+      ref: "post",
+      index: true,
+    },
+    shareCaption: {
+      type: String,
+      maxlength: 5000,
+    },
+    shares: [
+      {
+        type: mongoose.Types.ObjectId,
+        ref: "post", 
+      },
+    ],
+    shareCount: {
+      type: Number,
+      default: 0,
+      index: true,
+    },
+    
     reports: [
       {
         type: mongoose.Types.ObjectId,
@@ -95,12 +122,15 @@ postSchema.index({ status: 1, createdAt: -1 });
 postSchema.index({ reportCount: -1, moderationStatus: 1 });
 postSchema.index({ status: 1, isDraft: 1, hiddenBy: 1, createdAt: -1 });
 postSchema.index({ user: 1, status: 1, isDraft: 1, moderationStatus: 1 });
-
 postSchema.index({ likes: 1 });
-
 postSchema.index({ status: 1, isDraft: 1, moderationStatus: 1, createdAt: -1 });
-
 postSchema.index({ content: "text" });
+
+postSchema.index({ isShared: 1, originalPost: 1 });
+postSchema.index({ shareCount: -1 });
+postSchema.index({ originalPost: 1, user: 1 }, { 
+  partialFilterExpression: { isShared: true } 
+});
 
 postSchema.methods.incrementReportCount = function () {
   this.reportCount += 1;
@@ -133,6 +163,28 @@ postSchema.methods.unhidePost = function (userId) {
   return this.save();
 };
 
+postSchema.methods.incrementShareCount = async function () {
+  this.shareCount += 1;
+  return this.save();
+};
+
+postSchema.methods.decrementShareCount = async function () {
+  if (this.shareCount > 0) {
+    this.shareCount -= 1;
+    return this.save();
+  }
+  return this;
+};
+
+postSchema.methods.canBeShared = function () {
+  return (
+    this.status === "published" &&
+    !this.isDraft &&
+    this.moderationStatus !== "removed" &&
+    !this.isHidden
+  );
+};
+
 postSchema.pre("save", function (next) {
   if (
     this.isModified("status") &&
@@ -143,5 +195,24 @@ postSchema.pre("save", function (next) {
   }
   next();
 });
+
+postSchema.statics.getMostShared = function (limit = 10, timeRange = null) {
+  const query = {
+    status: "published",
+    isDraft: false,
+    moderationStatus: { $ne: "removed" },
+    shareCount: { $gt: 0 },
+  };
+
+  if (timeRange) {
+    query.createdAt = { $gte: new Date(Date.now() - timeRange) };
+  }
+
+  return this.find(query)
+    .sort("-shareCount -createdAt")
+    .limit(limit)
+    .populate("user", "username avatar fullname")
+    .lean();
+};
 
 module.exports = mongoose.model("post", postSchema);

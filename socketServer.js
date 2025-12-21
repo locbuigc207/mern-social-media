@@ -3,7 +3,7 @@ const logger = require('./utils/logger');
 
 const users = new Map();
 const admins = new Map();
-const userSockets = new Map(); 
+const userSockets = new Map();
 
 const SocketServer = (httpServer) => {
   const io = new Server(httpServer, {
@@ -13,7 +13,7 @@ const SocketServer = (httpServer) => {
     },
     pingTimeout: 60000,
     pingInterval: 25000,
-    maxHttpBufferSize: 1e8, 
+    maxHttpBufferSize: 1e8,
     transports: ['websocket', 'polling']
   });
 
@@ -23,14 +23,14 @@ const SocketServer = (httpServer) => {
         logger.warn('getUsersFromIds called with invalid ids', { ids });
         return [];
       }
-      
+
       const result = [];
       for (const id of ids) {
         if (!id) continue;
-        
+
         const idStr = id.toString();
         const socketId = users.get(idStr);
-        
+
         if (socketId && io.sockets.sockets.has(socketId)) {
           result.push({ id: idStr, socketId });
         } else if (socketId) {
@@ -87,7 +87,7 @@ const SocketServer = (httpServer) => {
       userId: userSockets.get(socket.id),
       ...data
     });
-    
+
     socket.emit('error', {
       event: eventName,
       message: 'Server error occurred',
@@ -121,7 +121,7 @@ const SocketServer = (httpServer) => {
         }
 
         const userId = id.toString();
-        
+
         const existingSocketId = users.get(userId);
         if (existingSocketId && existingSocketId !== socket.id) {
           const oldSocket = io.sockets.sockets.get(existingSocketId);
@@ -136,9 +136,9 @@ const SocketServer = (httpServer) => {
 
         users.set(userId, socket.id);
         userSockets.set(socket.id, userId);
-        
+
         socket.broadcast.emit("userOnline", userId);
-        
+
         socket.emit("connectionStatus", {
           connected: true,
           userId,
@@ -161,7 +161,7 @@ const SocketServer = (httpServer) => {
 
         const adminId = id.toString();
         admins.set(adminId, socket.id);
-        
+
         socket.emit("activeUsers", {
           count: users.size,
           timestamp: new Date().toISOString()
@@ -214,7 +214,7 @@ const SocketServer = (httpServer) => {
 
           const followers = getFollowersArray(newPost.user.followers);
           const recipientIds = [...followers, newPost.user._id];
-          
+
           safeEmitToUsers(socket, recipientIds, clientEvent, newPost);
         } catch (error) {
           handleSocketError(socket, eventName, error, { newPost });
@@ -226,6 +226,114 @@ const SocketServer = (httpServer) => {
     handlePostEvent("unLikePost", "unLikeToClient");
     handlePostEvent("createComment", "createCommentToClient");
     handlePostEvent("deleteComment", "deleteCommentToClient");
+
+    socket.on("sharePost", (data) => {
+      try {
+        if (!data || !data.sharedPost || !data.originalPost) {
+          logger.warn('sharePost called with invalid data');
+          return;
+        }
+
+        if (data.originalPost.user &&
+          data.originalPost.user._id !== data.sharedPost.user._id) {
+          const originalPostOwnerId = data.originalPost.user._id.toString();
+          const socketId = users.get(originalPostOwnerId);
+
+          if (socketId && io.sockets.sockets.has(socketId)) {
+            socket.to(socketId).emit("postSharedNotification", {
+              sharedBy: {
+                _id: data.sharedPost.user._id,
+                username: data.sharedPost.user.username,
+                avatar: data.sharedPost.user.avatar
+              },
+              sharedPost: data.sharedPost,
+              originalPost: data.originalPost,
+              timestamp: new Date().toISOString()
+            });
+          }
+        }
+
+        const followers = Array.isArray(data.sharedPost.user.followers)
+          ? data.sharedPost.user.followers
+          : [];
+
+        safeEmitToUsers(socket, followers, "newSharedPostToClient", {
+          sharedPost: data.sharedPost,
+          originalPost: data.originalPost,
+          timestamp: new Date().toISOString()
+        });
+
+        logger.info('Post shared event emitted', {
+          sharedPostId: data.sharedPost._id,
+          originalPostId: data.originalPost._id,
+          userId: data.sharedPost.user._id
+        });
+      } catch (error) {
+        handleSocketError(socket, 'sharePost', error, { data });
+      }
+    });
+
+    socket.on("unsharePost", (data) => {
+      try {
+        if (!data || !data.postId || !data.originalPostId) {
+          logger.warn('unsharePost called with invalid data');
+          return;
+        }
+
+        if (data.originalPostOwnerId &&
+          data.originalPostOwnerId !== data.userId) {
+          const socketId = users.get(data.originalPostOwnerId.toString());
+
+          if (socketId && io.sockets.sockets.has(socketId)) {
+            socket.to(socketId).emit("postUnsharedNotification", {
+              unsharedBy: data.userId,
+              postId: data.postId,
+              originalPostId: data.originalPostId,
+              timestamp: new Date().toISOString()
+            });
+          }
+        }
+
+        if (data.followers && Array.isArray(data.followers)) {
+          safeEmitToUsers(socket, data.followers, "sharedPostRemovedToClient", {
+            postId: data.postId,
+            originalPostId: data.originalPostId,
+            timestamp: new Date().toISOString()
+          });
+        }
+
+        logger.info('Post unshared event emitted', {
+          postId: data.postId,
+          originalPostId: data.originalPostId,
+          userId: data.userId
+        });
+      } catch (error) {
+        handleSocketError(socket, 'unsharePost', error, { data });
+      }
+    });
+
+    socket.on("updateShareCount", (data) => {
+      try {
+        if (!data || !data.postId || typeof data.shareCount !== 'number') {
+          logger.warn('updateShareCount called with invalid data');
+          return;
+        }
+
+        socket.broadcast.emit("shareCountUpdated", {
+          postId: data.postId,
+          shareCount: data.shareCount,
+          timestamp: new Date().toISOString()
+        });
+
+        logger.debug('Share count updated', {
+          postId: data.postId,
+          shareCount: data.shareCount
+        });
+      } catch (error) {
+        handleSocketError(socket, 'updateShareCount', error, { data });
+      }
+    });
+
 
     socket.on("createNotify", (msg) => {
       try {
@@ -250,7 +358,7 @@ const SocketServer = (httpServer) => {
 
         const recipientId = msg.recipient.toString();
         const socketId = users.get(recipientId);
-        
+
         if (socketId && io.sockets.sockets.has(socketId)) {
           socket.to(socketId).emit("addMessageToClient", msg);
           socket.emit("messageDelivered", {
@@ -311,15 +419,15 @@ const SocketServer = (httpServer) => {
           logger.warn('joinGroup called without groupId');
           return;
         }
-        
+
         const roomName = `group_${groupId}`;
         socket.join(roomName);
-        
+
         socket.emit("joinedGroup", {
           groupId,
           timestamp: new Date().toISOString()
         });
-        
+
         logger.info(`User joined group: ${groupId} (socket: ${socket.id})`);
       } catch (error) {
         handleSocketError(socket, 'joinGroup', error, { groupId });
@@ -329,10 +437,10 @@ const SocketServer = (httpServer) => {
     socket.on("leaveGroup", (groupId) => {
       try {
         if (!groupId) return;
-        
+
         const roomName = `group_${groupId}`;
         socket.leave(roomName);
-        
+
         logger.info(`User left group: ${groupId} (socket: ${socket.id})`);
       } catch (error) {
         handleSocketError(socket, 'leaveGroup', error, { groupId });
@@ -422,7 +530,7 @@ const SocketServer = (httpServer) => {
   io.shutdown = async () => {
     try {
       clearInterval(cleanupInterval);
-      
+
       io.emit('serverShutdown', {
         message: 'Server is shutting down',
         timestamp: new Date().toISOString()
@@ -444,7 +552,7 @@ const SocketServer = (httpServer) => {
   };
 
   logger.info(' Socket.IO server initialized');
-  
+
   return io;
 };
 
