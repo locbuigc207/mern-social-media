@@ -6,11 +6,10 @@ const userSchemas = require("../schemas/userSchema");
 const validateObjectId = require("../middleware/validateObjectId");
 const { followLimiter, searchLimiter } = require("../middleware/rateLimiter");
 
-router.get('/user/me', auth, userCtrl.getUser); // Get current user
-router.get('/user/friends', auth, userCtrl.getFriends); // Get friends list
+router.get('/user/me', auth, userCtrl.getCurrentUser);
+router.get('/user/friends', auth, userCtrl.getFriends);
 router.get("/search", auth, searchLimiter, userCtrl.searchUser);
 router.get("/suggestionsUser", auth, userCtrl.suggestionsUser);
-router.get("/user/me", auth, userCtrl.getCurrentUser);
 router.get("/user/:id", auth, validateObjectId("id"), userCtrl.getUser);
 router.patch(
   "/user",

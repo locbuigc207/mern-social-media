@@ -164,7 +164,7 @@ const validateEnv = () => {
 
   if (missing.length > 0) {
     throw new Error(
-      ` Missing required environment variables: ${missing.join(", ")}`
+      `Missing required environment variables: ${missing.join(", ")}`
     );
   }
 
@@ -185,11 +185,11 @@ const validateEnv = () => {
 
   for (const { key, default: defaultValue } of defaults) {
     if (process.env[key] === defaultValue) {
-      throw new Error(` ${key} must be changed from default value`);
+      throw new Error(`${key} must be changed from default value`);
     }
 
     if (process.env[key].length < 32) {
-      throw new Error(` ${key} must be at least 32 characters long`);
+      throw new Error(`${key} must be at least 32 characters long`);
     }
   }
 
@@ -197,7 +197,7 @@ const validateEnv = () => {
     !process.env.MONGODB_URL.startsWith("mongodb://") &&
     !process.env.MONGODB_URL.startsWith("mongodb+srv://")
   ) {
-    throw new Error(" Invalid MONGODB_URL format");
+    throw new Error("Invalid MONGODB_URL format");
   }
 
   if (process.env.NODE_ENV === "production") {
@@ -212,12 +212,12 @@ const validateEnv = () => {
 
     if (cloudinaryMissing.length > 0) {
       logger.warn(
-        ` Cloudinary not configured: ${cloudinaryMissing.join(", ")}`
+        `Cloudinary not configured: ${cloudinaryMissing.join(", ")}`
       );
     }
   }
 
-  logger.info(" Environment variables validated");
+  logger.info("Environment variables validated");
 };
 
 const connectDB = async (retries = 5) => {
@@ -233,36 +233,36 @@ const connectDB = async (retries = 5) => {
         family: 4,
       });
 
-      logger.info(" MongoDB Connected Successfully");
+      logger.info("MongoDB Connected Successfully");
       return;
     } catch (error) {
       logger.error(
-        ` MongoDB Connection Attempt ${i + 1}/${retries} Failed:`,
+        `MongoDB Connection Attempt ${i + 1}/${retries} Failed:`,
         error
       );
 
       if (i === retries - 1) {
-        logger.error("❌ Failed to connect to MongoDB after maximum retries");
+        logger.error("Failed to connect to MongoDB after maximum retries");
         process.exit(1);
       }
 
       const waitTime = 5000 * (i + 1);
-      logger.info(`⏳ Retrying in ${waitTime / 1000} seconds...`);
+      logger.info(`Retrying in ${waitTime / 1000} seconds...`);
       await new Promise((resolve) => setTimeout(resolve, waitTime));
     }
   }
 };
 
 mongoose.connection.on("connected", () => {
-  logger.info("✅ Mongoose connected to MongoDB");
+  logger.info("Mongoose connected to MongoDB");
 });
 
 mongoose.connection.on("error", (err) => {
-  logger.error("❌ Mongoose connection error:", err);
+  logger.error("Mongoose connection error:", err);
 });
 
 mongoose.connection.on("disconnected", () => {
-  logger.warn("⚠️ Mongoose disconnected from MongoDB");
+  logger.warn("Mongoose disconnected from MongoDB");
 });
 
 const httpServer = createServer(app);
@@ -280,27 +280,27 @@ const startServer = async () => {
       const dirPath = path.join(__dirname, dir);
       if (!fs.existsSync(dirPath)) {
         fs.mkdirSync(dirPath, { recursive: true });
-        logger.info(`📁 Created directory: ${dir}`);
+        logger.info(`Created directory: ${dir}`);
       }
     });
 
     const server = httpServer.listen(PORT, () => {
       logger.info("=====================================");
-      logger.info(` Server is running on port ${PORT}`);
-      logger.info(` Environment: ${process.env.NODE_ENV || "development"}`);
+      logger.info(`Server is running on port ${PORT}`);
+      logger.info(`Environment: ${process.env.NODE_ENV || "development"}`);
       logger.info(
-        ` Client URL: ${process.env.CLIENT_URL || "http://localhost:3000"}`
+        `Client URL: ${process.env.CLIENT_URL || "http://localhost:3000"}`
       );
       logger.info("=====================================");
     });
 
     io = SocketServer(httpServer);
-    logger.info("📡 Socket.IO: Enabled");
+    logger.info("Socket.IO: Enabled");
 
     shutdownManager.register("http", async () => {
       return new Promise((resolve) => {
         server.close(() => {
-          logger.info(" HTTP server closed");
+          logger.info("HTTP server closed");
           resolve();
         });
       });
@@ -314,43 +314,43 @@ const startServer = async () => {
 
     shutdownManager.register("mongodb", async () => {
       await mongoose.connection.close(false);
-      logger.info(" MongoDB connection closed");
+      logger.info("MongoDB connection closed");
     });
 
     shutdownManager.register("redis", async () => {
       await closeRateLimiter();
-      logger.info(" Redis connection closed");
+      logger.info("Redis connection closed");
     });
 
     shutdownManager.register("postScheduler", async () => {
       await stopPostScheduler();
-      logger.info(" Post scheduler stopped");
+      logger.info("Post scheduler stopped");
     });
 
     shutdownManager.register("cleanupSchedulers", async () => {
       stopCleanupSchedulers();
-      logger.info(" Cleanup schedulers stopped");
+      logger.info("Cleanup schedulers stopped");
     });
 
     await startPostScheduler(io);
     startCleanupSchedulers();
 
-    logger.info(" All systems initialized successfully");
+    logger.info("All systems initialized successfully");
   } catch (error) {
-    logger.error(" Failed to start server:", error);
+    logger.error("Failed to start server:", error);
     process.exit(1);
   }
 };
 
 const shutdown = async (signal) => {
-  logger.info(`\n⚠️ ${signal} received. Starting graceful shutdown...`);
+  logger.info(`\n${signal} received. Starting graceful shutdown...`);
 
   try {
     await shutdownManager.shutdown();
-    logger.info("✅ Graceful shutdown completed");
+    logger.info("Graceful shutdown completed");
     process.exit(0);
   } catch (error) {
-    logger.error("❌ Error during shutdown:", error);
+    logger.error("Error during shutdown:", error);
     process.exit(1);
   }
 };
@@ -359,21 +359,21 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("SIGINT", () => shutdown("SIGINT"));
 
 process.on("uncaughtException", (error) => {
-  logger.error(" Uncaught Exception:", error);
+  logger.error("Uncaught Exception:", error);
   shutdown("uncaughtException");
 });
 
 process.on("unhandledRejection", (reason, promise) => {
-  logger.error(" Unhandled Rejection at:", promise, "reason:", reason);
+  logger.error("Unhandled Rejection at:", promise, "reason:", reason);
   shutdown("unhandledRejection");
 });
 
-// const SHUTDOWN_TIMEOUT = 30000;
-// const forceShutdownTimer = setTimeout(() => {
-//   logger.error(" Forced shutdown after timeout");
-//   process.exit(1);
-// }, SHUTDOWN_TIMEOUT);
-// forceShutdownTimer.unref();
+const SHUTDOWN_TIMEOUT = parseInt(process.env.SHUTDOWN_TIMEOUT) || 30000;
+const forceShutdownTimer = setTimeout(() => {
+  logger.error(`Forced shutdown after ${SHUTDOWN_TIMEOUT}ms timeout`);
+  process.exit(1);
+}, SHUTDOWN_TIMEOUT);
+forceShutdownTimer.unref();
 
 startServer();
 

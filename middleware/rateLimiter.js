@@ -5,6 +5,7 @@ const logger = require("../utils/logger");
 const { RateLimitError } = require("../utils/AppError");
 
 let redisClient = null;
+let isRedisAvailable = false;
 
 const initializeRedis = async () => {
   if (process.env.REDIS_URL) {
@@ -15,6 +16,7 @@ const initializeRedis = async () => {
           reconnectStrategy: (retries) => {
             if (retries > 10) {
               logger.error('Redis reconnection failed after 10 attempts');
+              isRedisAvailable = false;
               return new Error('Redis reconnection failed');
             }
             return Math.min(retries * 100, 3000);
@@ -24,16 +26,29 @@ const initializeRedis = async () => {
 
       redisClient.on('error', (err) => {
         logger.error('Redis Client Error', err);
+        isRedisAvailable = false;
       });
 
       redisClient.on('connect', () => {
         logger.info('Redis connected for rate limiting');
+        isRedisAvailable = true;
+      });
+
+      redisClient.on('end', () => {
+        logger.warn('Redis connection closed');
+        isRedisAvailable = false;
+      });
+
+      redisClient.on('reconnecting', () => {
+        logger.info('Redis reconnecting...');
+        isRedisAvailable = false;
       });
 
       await redisClient.connect();
     } catch (err) {
       logger.error('Failed to connect to Redis', err);
       redisClient = null;
+      isRedisAvailable = false;
     }
   }
 };
@@ -71,114 +86,117 @@ const createRateLimiter = (options) => {
     })
   };
 
-  if (redisClient && redisClient.isOpen) {
-    config.store = new RedisStore({
-      client: redisClient,
-      prefix: options.prefix || 'rl:',
-    });
+  if (redisClient && isRedisAvailable) {
+    try {
+      config.store = new RedisStore({
+        client: redisClient,
+        prefix: options.prefix || 'rl:',
+      });
+    } catch (err) {
+      logger.warn('Failed to create Redis store, falling back to memory store', err);
+      isRedisAvailable = false;
+    }
   }
 
   return rateLimit(config);
 };
 
 const authLimiter = createRateLimiter({
-  windowMs: 15 * 60 * 1000, 
-  max: 5, 
+  windowMs: 15 * 60 * 1000,
+  max: 5,
   message: 'Too many login attempts, please try again later.',
   prefix: 'rl:auth:',
-  skipSuccessfulRequests: true, 
+  skipSuccessfulRequests: true,
 });
 
 const registerLimiter = createRateLimiter({
-  windowMs: 60 * 60 * 1000, 
-  max: 3, 
+  windowMs: 60 * 60 * 1000,
+  max: 3,
   message: 'Too many accounts created, please try again later.',
   prefix: 'rl:register:',
-  keyGenerator: (req) => req.ip, 
+  keyGenerator: (req) => req.ip,
 });
 
 const passwordResetLimiter = createRateLimiter({
-  windowMs: 60 * 60 * 1000, 
-  max: 3, 
+  windowMs: 60 * 60 * 1000,
+  max: 3,
   message: 'Too many password reset attempts, please try again later.',
   prefix: 'rl:password-reset:',
 });
 
 const createPostLimiter = createRateLimiter({
-  windowMs: 60 * 60 * 1000, 
-  max: 30, 
+  windowMs: 60 * 60 * 1000,
+  max: 30,
   message: 'You are creating posts too quickly, please slow down.',
   prefix: 'rl:create-post:',
 });
 
 const commentLimiter = createRateLimiter({
-  windowMs: 60 * 1000, 
-  max: 10, 
+  windowMs: 60 * 1000,
+  max: 10,
   message: 'You are commenting too quickly, please slow down.',
   prefix: 'rl:comment:',
 });
 
 const messageLimiter = createRateLimiter({
-  windowMs: 60 * 1000, 
+  windowMs: 60 * 1000,
   max: 30,
   message: 'You are sending messages too quickly, please slow down.',
   prefix: 'rl:message:',
 });
 
 const interactionLimiter = createRateLimiter({
-  windowMs: 60 * 1000, 
-  max: 60, 
+  windowMs: 60 * 1000,
+  max: 60,
   message: 'You are interacting too quickly, please slow down.',
   prefix: 'rl:interaction:',
 });
 
 const followLimiter = createRateLimiter({
-  windowMs: 60 * 60 * 1000, 
-  max: 100, 
+  windowMs: 60 * 60 * 1000,
+  max: 100,
   message: 'You are following/unfollowing too quickly, please slow down.',
   prefix: 'rl:follow:',
 });
 
 const searchLimiter = createRateLimiter({
-  windowMs: 60 * 1000, 
-  max: 30, 
+  windowMs: 60 * 1000,
+  max: 30,
   message: 'Too many search requests, please slow down.',
   prefix: 'rl:search:',
 });
 
-
 const uploadLimiter = createRateLimiter({
-  windowMs: 60 * 60 * 1000, 
-  max: 50, 
+  windowMs: 60 * 60 * 1000,
+  max: 50,
   message: 'Too many file uploads, please try again later.',
   prefix: 'rl:upload:',
 });
 
 const generalLimiter = createRateLimiter({
-  windowMs: 15 * 60 * 1000, 
-  max: 1000, 
+  windowMs: 15 * 60 * 1000,
+  max: 1000,
   message: 'Too many requests, please try again later.',
   prefix: 'rl:general:',
 });
 
 const reportLimiter = createRateLimiter({
-  windowMs: 60 * 60 * 1000, 
-  max: 10, 
+  windowMs: 60 * 60 * 1000,
+  max: 10,
   message: 'Too many reports, please try again later.',
   prefix: 'rl:report:',
 });
 
 const storyLimiter = createRateLimiter({
-  windowMs: 60 * 60 * 1000, 
-
-  max: 30, 
+  windowMs: 60 * 60 * 1000,
+  max: 30,
   message: 'You are creating stories too quickly, please slow down.',
   prefix: 'rl:story:',
 });
 
 const adminLimiter = createRateLimiter({
-  windowMs: 60 * 1000, 
-  max: 100, 
+  windowMs: 60 * 1000,
+  max: 100,
   message: 'Too many admin actions, please slow down.',
   prefix: 'rl:admin:',
   skip: (req) => process.env.NODE_ENV === 'development',
@@ -200,18 +218,28 @@ const dynamicRateLimiter = (limits) => {
 };
 
 const closeRateLimiter = async () => {
-  if (redisClient && redisClient.isOpen) {
+  if (redisClient) {
     try {
-      await redisClient.quit();
-      logger.info('Redis rate limiter connection closed');
+      if (redisClient.isOpen) {
+        await redisClient.quit();
+        logger.info('Redis rate limiter connection closed');
+      }
     } catch (err) {
       logger.error('Error closing Redis connection', err);
+      try {
+        await redisClient.disconnect();
+      } catch (disconnectErr) {
+        logger.error('Error forcing Redis disconnect', disconnectErr);
+      }
+    } finally {
+      redisClient = null;
+      isRedisAvailable = false;
     }
   }
 };
 
 const getRateLimitInfo = async (userId, prefix = 'rl:') => {
-  if (!redisClient || !redisClient.isOpen) {
+  if (!redisClient || !isRedisAvailable) {
     return null;
   }
 
@@ -231,7 +259,7 @@ const getRateLimitInfo = async (userId, prefix = 'rl:') => {
 };
 
 const resetRateLimit = async (userId, prefix = 'rl:') => {
-  if (!redisClient || !redisClient.isOpen) {
+  if (!redisClient || !isRedisAvailable) {
     return false;
   }
 
@@ -266,5 +294,6 @@ module.exports = {
   closeRateLimiter,
   getRateLimitInfo,
   resetRateLimit,
-  redisClient
+  redisClient,
+  isRedisAvailable
 };

@@ -22,7 +22,20 @@ const messageSchema = new Schema(
     deletedBy: [{
       type: mongoose.Types.ObjectId,
       ref: "user"
-    }]
+    }],
+    reactions: [
+      {
+        user: {
+          type: mongoose.Types.ObjectId,
+          ref: "user",
+        },
+        emoji: String,
+        createdAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ]
   },
   {
     timestamps: true,

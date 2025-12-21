@@ -64,69 +64,11 @@ const adminCtrl = {
   }),
 
   getTotalSpamPosts: asyncHandler(async (req, res) => {
-    const posts = await Posts.find({
-      status: "published",
-      isDraft: false,
-    });
-
-    const SPAM_THRESHOLD = parseInt(process.env.SPAM_THRESHOLD) || 0;
-    const reportedPosts = posts.filter(
-      (post) => post.reports.length > SPAM_THRESHOLD
-    );
-    const total_spam_posts = reportedPosts.length;
-
-    logger.info("Total spam posts retrieved", {
-      total_spam_posts,
-      adminId: req.user._id,
-    });
-    res.json({ total_spam_posts });
-  }),
-
-  // getSpamPosts: asyncHandler(async (req, res) => {
-  //   const page = parseInt(req.query.page) || 1;
-  //   const limit = parseInt(req.query.limit) || 20;
-  //   const skip = (page - 1) * limit;
-
-  //   const SPAM_THRESHOLD = parseInt(process.env.SPAM_THRESHOLD) || 0;
-
-  //   const posts = await Posts.find({
-  //     status: "published",
-  //     isDraft: false,
-  //   })
-  //     .select("user createdAt reports content images")
-  //     .populate({
-  //       path: "user",
-  //       select: "username avatar email fullname",
-  //     })
-  //     .sort("-reports");
-
-  //   const spamPosts = posts.filter(
-  //     (post) => post.reports.length > SPAM_THRESHOLD
-  //   );
-  //   const paginatedPosts = spamPosts.slice(skip, skip + limit);
-
-  //   logger.info("Spam posts retrieved", {
-  //     total: spamPosts.length,
-  //     page,
-  //     adminId: req.user._id,
-  //   });
-
-  //   res.json({
-  //     spamPosts: paginatedPosts,
-  //     total: spamPosts.length,
-  //     page,
-  //     totalPages: Math.ceil(spamPosts.length / limit),
-  //   });
-  // }),
-  // Cập nhật hàm getTotalSpamPosts: Đếm dựa trên bảng Reports
-  getTotalSpamPosts: asyncHandler(async (req, res) => {
-    // Lấy tất cả ID bài viết đã bị report
     const uniqueReportedPosts = await Reports.distinct("targetId", {
       reportType: "post",
-      status: "pending", // Chỉ đếm các bài đang chờ xử lý
+      status: "pending",
     });
 
-    // Nếu muốn chính xác hơn với threshold, cần dùng aggregate (nhưng distinct là đủ nhanh cho dashboard)
     const total_spam_posts = uniqueReportedPosts.length;
 
     logger.info("Total spam posts retrieved via Reports", {
@@ -141,7 +83,6 @@ const adminCtrl = {
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
 
-    // 1. Dùng Aggregate để gom nhóm các Report theo bài viết
     const reportedPostsData = await Reports.aggregate([
       { $match: { reportType: "post", status: "pending" } },
       {
@@ -150,7 +91,7 @@ const adminCtrl = {
           count: { $sum: 1 },
           latestReport: { $max: "$createdAt" },
           reasons: { $addToSet: "$reason" },
-          reporterIds: { $addToSet: "$reportedBy" }, // Lấy danh sách ID người báo cáo
+          reporterIds: { $addToSet: "$reportedBy" },
         },
       },
       { $match: { count: { $gt: 0 } } },
@@ -159,10 +100,8 @@ const adminCtrl = {
       { $limit: limit },
     ]);
 
-    // 2. Lấy danh sách ID bài viết từ kết quả trên
     const postIds = reportedPostsData.map((item) => item._id);
 
-    // 3. Tìm thông tin chi tiết các bài viết đó từ bảng Posts
     const posts = await Posts.find({ _id: { $in: postIds } })
       .select("user createdAt content images reports")
       .populate({
@@ -170,7 +109,6 @@ const adminCtrl = {
         select: "username avatar email fullname",
       });
 
-    // 4. Ghép dữ liệu (SỬA LỖI Ở ĐÂY: Thêm async vào trong map)
     const finalPosts = await Promise.all(
       posts.map(async (post) => {
         const reportData = reportedPostsData.find(
@@ -178,11 +116,9 @@ const adminCtrl = {
         );
         const postObj = post.toObject();
 
-        // Ghi đè số liệu thực tế
         postObj.reportCountReal = reportData ? reportData.count : 0;
         postObj.reportReasons = reportData ? reportData.reasons : [];
 
-        // Lấy thông tin người báo cáo (Reporters)
         if (reportData && reportData.reporterIds) {
           const reporters = await Users.find({
             _id: { $in: reportData.reporterIds },
@@ -214,6 +150,7 @@ const adminCtrl = {
       totalPages: Math.ceil(total.length / limit),
     });
   }),
+
   getSpamPostDetail: asyncHandler(async (req, res) => {
     const post = await Posts.findById(req.params.id)
       .populate("user", "username avatar email fullname")

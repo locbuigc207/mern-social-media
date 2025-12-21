@@ -19,21 +19,5 @@ router.get(
   generalLimiter,
   hashtagCtrl.getRelated
 );
-router.get("/hashtags/trending", auth, generalLimiter, hashtagCtrl.getTrending);
-router.get("/hashtags/search", auth, searchLimiter, hashtagCtrl.searchHashtags);
-
-router.get(
-  "/hashtag/:hashtag/posts",
-  auth,
-  validatePagination,
-  generalLimiter,
-  hashtagCtrl.getHashtagPosts
-);
-router.get(
-  "/hashtag/:hashtag/related",
-  auth,
-  generalLimiter,
-  hashtagCtrl.getRelated
-);
 
 module.exports = router;
