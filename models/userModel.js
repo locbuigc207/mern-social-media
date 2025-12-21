@@ -121,6 +121,11 @@ const userSchema = new mongoose.Schema(
         invalidatedAt: Date,
       },
     ],
+    tokenVersion: {
+      type: Number,
+      default: 0,
+      index: true,
+    },
     privacySettings: {
       profileVisibility: {
         type: String,
@@ -154,12 +159,23 @@ const userSchema = new mongoose.Schema(
     lastActive: {
       type: Date,
       default: Date.now,
+      index: true, 
     },
     twoFactorEnabled: {
       type: Boolean,
       default: false,
     },
     twoFactorSecret: String,
+    lastLoginAt: {
+      type: Date,
+      index: true,
+    },
+    loginCount: {
+      type: Number,
+      default: 0,
+    },
+    lastLoginIP: String,
+    lastLoginDevice: String,
   },
   {
     timestamps: true,
@@ -177,6 +193,9 @@ userSchema.index({ blockedBy: 1 });
 userSchema.index({ isVerified: 1, isBlocked: 1 });
 
 userSchema.index({ username: "text", fullname: "text", email: "text" });
+
+userSchema.index({ role: 1, isBlocked: 1, isVerified: 1 });
+userSchema.index({ lastActive: -1 }); // For online users query
 
 userSchema.methods.canResetPassword = function () {
   if (this.resetAttempts >= 5) {
@@ -201,6 +220,20 @@ userSchema.methods.resetPasswordAttempts = async function () {
   await this.save();
 };
 
+userSchema.methods.invalidateAllSessions = async function () {
+  this.tokenVersion += 1;
+  await this.save();
+};
+
+userSchema.methods.updateLastLogin = async function (ip, device) {
+  this.lastLoginAt = new Date();
+  this.loginCount += 1;
+  this.lastActive = new Date();
+  if (ip) this.lastLoginIP = ip;
+  if (device) this.lastLoginDevice = device;
+  await this.save();
+};
+
 userSchema.pre("save", function (next) {
   if (this.isModified("email")) {
     this.email = this.email.toLowerCase();
@@ -209,6 +242,16 @@ userSchema.pre("save", function (next) {
     this.username = this.username.toLowerCase();
   }
   next();
+});
+
+userSchema.post("save", function (doc) {
+  if (this.isModified("isBlocked") && this.isBlocked) {
+    const logger = require("../utils/logger");
+    logger.audit("User blocked", doc._id, {
+      reason: doc.blockedReason,
+      blockedBy: doc.blockedByAdmin,
+    });
+  }
 });
 
 module.exports = mongoose.model("user", userSchema);

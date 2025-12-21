@@ -17,6 +17,8 @@ const SocketServer = (httpServer) => {
     transports: ['websocket', 'polling']
   });
 
+  let cleanupIntervalId = null;
+
   const getUsersFromIds = (ids) => {
     try {
       if (!ids || !Array.isArray(ids)) {
@@ -72,14 +74,14 @@ const SocketServer = (httpServer) => {
       }
 
       if (cleanedUsers > 0 || cleanedAdmins > 0) {
-        logger.info(`🧹 Cleanup: ${cleanedUsers} users, ${cleanedAdmins} admins removed. Current: ${users.size} users, ${admins.size} admins`);
+        logger.info(` Cleanup: ${cleanedUsers} users, ${cleanedAdmins} admins removed. Current: ${users.size} users, ${admins.size} admins`);
       }
     } catch (error) {
       logger.error('Error in cleanupStaleConnections:', error);
     }
   };
 
-  const cleanupInterval = setInterval(cleanupStaleConnections, 5 * 60 * 1000);
+  cleanupIntervalId = setInterval(cleanupStaleConnections, 5 * 60 * 1000);
 
   const handleSocketError = (socket, eventName, error, data = {}) => {
     logger.error(`Socket error in ${eventName}:`, error, {
@@ -334,7 +336,6 @@ const SocketServer = (httpServer) => {
       }
     });
 
-
     socket.on("createNotify", (msg) => {
       try {
         if (!msg || !msg.recipients) {
@@ -529,7 +530,10 @@ const SocketServer = (httpServer) => {
 
   io.shutdown = async () => {
     try {
-      clearInterval(cleanupInterval);
+      if (cleanupIntervalId) {
+        clearInterval(cleanupIntervalId);
+        cleanupIntervalId = null;
+      }
 
       io.emit('serverShutdown', {
         message: 'Server is shutting down',

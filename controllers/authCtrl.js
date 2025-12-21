@@ -73,7 +73,6 @@ const authCtrl = {
     } catch (emailError) {
       console.error("Error sending verification email:", emailError);
       
-      // Vẫn tạo user thành công nhưng cảnh báo về email
       res.json({
         msg: "Registration successful! However, we couldn't send the verification email. Please request a new verification email.",
         emailError: true,
@@ -96,14 +95,12 @@ const authCtrl = {
     });
 
     if (!user) {
-      // Kiểm tra xem có user nào với token này không (kể cả đã hết hạn)
       const expiredUser = await Users.findOne({ verificationToken: token });
       
       if (expiredUser) {
         console.log('⏰ Token found but expired');
         throw new ValidationError("Verification token has expired. Please request a new verification email.");
       } else {
-        // Có thể user đã verify rồi, kiểm tra bằng email từ session hoặc thông báo chung
         console.log('❌ Token not found - User may have already verified or token is invalid');
         throw new ValidationError("This verification link is invalid or has already been used. If you haven't verified your email yet, please request a new verification link.");
       }
@@ -132,6 +129,8 @@ const authCtrl = {
       httpOnly: true,
       path: "/api/refresh_token",
       maxAge: 30 * 24 * 60 * 60 * 1000,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
     });
 
     res.json({
@@ -290,11 +289,12 @@ const authCtrl = {
       user.resetPasswordExpires = undefined;
       user.resetAttempts = 0;
       user.previousResetTokens = [];
+      user.tokenVersion = (user.tokenVersion || 0) + 1; 
       
       await user.save({ session });
       await session.commitTransaction();
 
-      res.json({ msg: "Password reset successful! You can now login." });
+      res.json({ msg: "Password reset successful! You can now login with your new password." });
     } catch (error) {
       await session.abortTransaction();
       throw error;
@@ -341,10 +341,13 @@ const authCtrl = {
 
     await Users.findOneAndUpdate(
       { _id: req.user._id },
-      { password: newPasswordHash }
+      { 
+        password: newPasswordHash,
+        $inc: { tokenVersion: 1 }
+      }
     );
 
-    res.json({ msg: "Password updated successfully." });
+    res.json({ msg: "Password updated successfully. Please login again with your new password." });
   }),
 
   registerAdmin: asyncHandler(async (req, res) => {
@@ -417,8 +420,8 @@ const authCtrl = {
     const populatedUser = await Users.findById(user._id)
       .populate("followers following", "-password");
 
-    const access_token = createAccessToken({ id: user._id });
-    const refresh_token = createRefreshToken({ id: user._id });
+    const access_token = createAccessToken({ id: user._id, version: user.tokenVersion || 0 });
+    const refresh_token = createRefreshToken({ id: user._id, version: user.tokenVersion || 0 });
 
     res.cookie("refreshtoken", refresh_token, {
       httpOnly: true,
@@ -459,13 +462,15 @@ const authCtrl = {
       throw new AuthenticationError("Email or Password is incorrect.");
     }
 
-    const access_token = createAccessToken({ id: user._id });
-    const refresh_token = createRefreshToken({ id: user._id });
+    const access_token = createAccessToken({ id: user._id, version: user.tokenVersion || 0 });
+    const refresh_token = createRefreshToken({ id: user._id, version: user.tokenVersion || 0 });
 
     res.cookie("refreshtoken", refresh_token, {
       httpOnly: true,
       path: "/api/refresh_token",
       maxAge: 30 * 24 * 60 * 60 * 1000,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
     });
 
     res.json({
@@ -506,6 +511,10 @@ const authCtrl = {
         throw new ValidationError("User does not exist.");
       }
 
+      if (user.tokenVersion !== undefined && result.version !== user.tokenVersion) {
+        throw new AuthenticationError("Session expired. Please login again.");
+      }
+
       if (user.isBlocked && user.role !== 'admin') {
         return res.status(403).json({ 
           msg: "Your account has been blocked.",
@@ -513,7 +522,7 @@ const authCtrl = {
         });
       }
 
-      const access_token = createAccessToken({ id: result.id });
+      const access_token = createAccessToken({ id: result.id, version: user.tokenVersion || 0 });
       res.json({ access_token, user });
       
     } catch (err) {

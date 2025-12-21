@@ -10,38 +10,65 @@ const {
 
 const userCtrl = {
   searchUser: asyncHandler(async (req, res) => {
-    const searchQuery = req.query.username
-      ? req.query.username.replace(/[$.]/g, "").trim()
-      : "";
+    let searchQuery = req.query.username || "";
 
-    if (!searchQuery) {
+    searchQuery = searchQuery
+      .replace(/[$.]/g, "") 
+      .replace(/[<>'"]/g, "") 
+      .trim();
+
+    if (searchQuery.length === 0) {
       return res.json({ users: [] });
     }
 
+    if (searchQuery.length < 2) {
+      return res.status(400).json({
+        msg: "Search query must be at least 2 characters",
+      });
+    }
+
+    if (searchQuery.length > 50) {
+      return res.status(400).json({
+        msg: "Search query too long (max 50 characters)",
+      });
+    }
+
+    const validPattern = /^[a-zA-Z0-9_]+$/;
+    if (!validPattern.test(searchQuery)) {
+      return res.status(400).json({
+        msg: "Search query contains invalid characters",
+      });
+    }
+
     const currentUser = await Users.findById(req.user._id)
-      .select("blockedUsers blockedBy");
+      .select("blockedUsers blockedBy")
+      .lean();
 
     const excludedUserIds = [
       req.user._id,
       ...currentUser.blockedUsers,
-      ...currentUser.blockedBy
+      ...currentUser.blockedBy,
     ];
 
+    const escapedQuery = searchQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
     const users = await Users.find({
-      username: { $regex: searchQuery, $options: "i" },
+      username: { $regex: escapedQuery, $options: "i" },
       role: "user",
       isBlocked: false,
-      _id: { $nin: excludedUserIds }
+      _id: { $nin: excludedUserIds },
     })
       .limit(10)
-      .select("fullname username avatar");
+      .select("fullname username avatar")
+      .lean();
 
     res.json({ users });
   }),
 
   getUser: asyncHandler(async (req, res) => {
-    const userId = req.params.id === 'me' || !req.params.id ? req.user._id : req.params.id;
-    
+    const userId =
+      req.params.id === "me" || !req.params.id ? req.user._id : req.params.id;
+
     const user = await Users.findById(userId)
       .select("-password")
       .populate("followers following", "-password");
@@ -54,13 +81,14 @@ const userCtrl = {
       return res.json({ user });
     }
 
-    const currentUser = await Users.findById(req.user._id)
-      .select("blockedUsers blockedBy");
+    const currentUser = await Users.findById(req.user._id).select(
+      "blockedUsers blockedBy"
+    );
 
     if (currentUser.blockedBy.includes(userId)) {
-      return res.status(403).json({ 
+      return res.status(403).json({
         msg: "This user is not available.",
-        isBlocked: true 
+        isBlocked: true,
       });
     }
 
@@ -71,9 +99,9 @@ const userCtrl = {
           username: user.username,
           fullname: user.fullname,
           avatar: user.avatar,
-          isBlockedByYou: true
+          isBlockedByYou: true,
         },
-        message: "You have blocked this user"
+        message: "You have blocked this user",
       });
     }
 
@@ -146,14 +174,14 @@ const userCtrl = {
 
     await Users.findOneAndUpdate(
       { _id: req.user._id },
-      { 
-        avatar, 
-        fullname: fullname.trim(), 
-        mobile, 
-        address, 
-        story: story ? story.trim() : "", 
-        website: website ? website.trim() : "", 
-        gender 
+      {
+        avatar,
+        fullname: fullname.trim(),
+        mobile,
+        address,
+        story: story ? story.trim() : "",
+        website: website ? website.trim() : "",
+        gender,
       }
     );
 
@@ -172,8 +200,7 @@ const userCtrl = {
 
     const privacySettings = {};
 
-    if (profileVisibility)
-      privacySettings.profileVisibility = profileVisibility;
+    if (profileVisibility) privacySettings.profileVisibility = profileVisibility;
     if (whoCanMessage) privacySettings.whoCanMessage = whoCanMessage;
     if (whoCanComment) privacySettings.whoCanComment = whoCanComment;
     if (whoCanTag) privacySettings.whoCanTag = whoCanTag;
@@ -226,7 +253,7 @@ const userCtrl = {
           $addToSet: { blockedUsers: id },
           $pull: {
             following: id,
-            followers: id 
+            followers: id,
           },
         },
         { session }
@@ -321,11 +348,14 @@ const userCtrl = {
       throw new NotFoundError("User");
     }
 
-    const currentUser = await Users.findById(req.user._id)
-      .select("blockedUsers blockedBy following");
+    const currentUser = await Users.findById(req.user._id).select(
+      "blockedUsers blockedBy following"
+    );
 
-    if (currentUser.blockedBy.includes(req.params.id) || 
-        currentUser.blockedUsers.includes(req.params.id)) {
+    if (
+      currentUser.blockedBy.includes(req.params.id) ||
+      currentUser.blockedUsers.includes(req.params.id)
+    ) {
       return res.status(403).json({ msg: "You cannot follow this user." });
     }
 
@@ -455,8 +485,8 @@ const userCtrl = {
 
   getFriends: asyncHandler(async (req, res) => {
     const user = await Users.findById(req.user._id)
-      .populate('following', 'fullname username avatar')
-      .select('following');
+      .populate("following", "fullname username avatar")
+      .select("following");
 
     if (!user) {
       throw new NotFoundError("User");

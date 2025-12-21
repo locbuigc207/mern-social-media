@@ -11,14 +11,19 @@ const auth = async (req, res, next) => {
       throw new AuthenticationError("Authentication required. Please login.");
     }
 
-    // Remove "Bearer " prefix if present
+    token = token.trim();
+    
     if (token.startsWith("Bearer ")) {
-      token = token.slice(7);
+      token = token.substring(7).trim();
+    }
+    
+    if (!token || token.length < 20) {
+      throw new AuthenticationError("Invalid token format.");
     }
 
     const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
 
-    if (!decoded) {
+    if (!decoded || !decoded.id) {
       throw new AuthenticationError("Invalid authentication token.");
     }
 
@@ -155,15 +160,20 @@ const checkEmailVerified = async (req, res, next) => {
 
 const optionalAuth = async (req, res, next) => {
   try {
-    const token = req.header("Authorization");
+    let token = req.header("Authorization");
 
     if (!token) {
       return next();
     }
 
+    token = token.trim();
+    if (token.startsWith("Bearer ")) {
+      token = token.substring(7).trim();
+    }
+
     const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
 
-    if (decoded) {
+    if (decoded && decoded.id) {
       const user = await Users.findOne({ _id: decoded.id }).select("-password");
       
       if (user && !user.isBlocked) {
@@ -179,10 +189,15 @@ const optionalAuth = async (req, res, next) => {
 
 const refreshTokenIfNeeded = async (req, res, next) => {
   try {
-    const token = req.header("Authorization");
+    let token = req.header("Authorization");
 
     if (!token) {
       return next();
+    }
+
+    token = token.trim();
+    if (token.startsWith("Bearer ")) {
+      token = token.substring(7).trim();
     }
 
     const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, {

@@ -6,6 +6,8 @@ const { RateLimitError } = require("../utils/AppError");
 
 let redisClient = null;
 let isRedisAvailable = false;
+let reconnectAttempts = 0; 
+const MAX_RECONNECT_ATTEMPTS = 10;
 
 const initializeRedis = async () => {
   if (process.env.REDIS_URL) {
@@ -14,42 +16,68 @@ const initializeRedis = async () => {
         url: process.env.REDIS_URL,
         socket: {
           reconnectStrategy: (retries) => {
-            if (retries > 10) {
-              logger.error('Redis reconnection failed after 10 attempts');
+            reconnectAttempts = retries;
+            
+            if (retries > MAX_RECONNECT_ATTEMPTS) {
+              logger.error(`Redis reconnection failed after ${MAX_RECONNECT_ATTEMPTS} attempts`);
               isRedisAvailable = false;
               return new Error('Redis reconnection failed');
             }
-            return Math.min(retries * 100, 3000);
-          }
+            
+            const delay = Math.min(retries * 100, 3000);
+            logger.info(`Redis reconnecting in ${delay}ms (attempt ${retries}/${MAX_RECONNECT_ATTEMPTS})`);
+            return delay;
+          },
+          connectTimeout: 10000,
         }
       });
 
       redisClient.on('error', (err) => {
         logger.error('Redis Client Error', err);
         isRedisAvailable = false;
+        
+        if (err.code === 'ECONNREFUSED') {
+          logger.warn('Redis connection refused - falling back to memory store');
+        }
       });
 
       redisClient.on('connect', () => {
-        logger.info('Redis connected for rate limiting');
+        logger.info('Redis connecting...');
+        reconnectAttempts = 0;
+      });
+
+      redisClient.on('ready', () => {
+        logger.info(' Redis connected and ready for rate limiting');
         isRedisAvailable = true;
+        reconnectAttempts = 0;
       });
 
       redisClient.on('end', () => {
-        logger.warn('Redis connection closed');
+        logger.warn(' Redis connection closed');
         isRedisAvailable = false;
       });
 
       redisClient.on('reconnecting', () => {
-        logger.info('Redis reconnecting...');
+        logger.info(` Redis reconnecting (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`);
         isRedisAvailable = false;
       });
 
-      await redisClient.connect();
+      const connectPromise = redisClient.connect();
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Redis connection timeout')), 10000)
+      );
+
+      await Promise.race([connectPromise, timeoutPromise]);
+      
     } catch (err) {
       logger.error('Failed to connect to Redis', err);
       redisClient = null;
       isRedisAvailable = false;
+      
+      logger.warn(' Continuing without Redis - using memory-based rate limiting');
     }
+  } else {
+    logger.info(' REDIS_URL not configured - using memory-based rate limiting');
   }
 };
 
@@ -91,6 +119,15 @@ const createRateLimiter = (options) => {
       config.store = new RedisStore({
         client: redisClient,
         prefix: options.prefix || 'rl:',
+        sendCommand: async (...args) => {
+          try {
+            return await redisClient.sendCommand(args);
+          } catch (err) {
+            logger.error('Redis store command failed', err);
+            isRedisAvailable = false;
+            throw err;
+          }
+        }
       });
     } catch (err) {
       logger.warn('Failed to create Redis store, falling back to memory store', err);
@@ -98,7 +135,22 @@ const createRateLimiter = (options) => {
     }
   }
 
-  return rateLimit(config);
+  const limiter = rateLimit(config);
+  
+  return (req, res, next) => {
+    limiter(req, res, (err) => {
+      if (err) {
+        if (err.message && err.message.includes('Redis')) {
+          logger.warn('Rate limiter store error, request allowed', {
+            error: err.message,
+            path: req.path
+          });
+          return next(); 
+        }
+      }
+      next(err);
+    });
+  };
 };
 
 const authLimiter = createRateLimiter({
@@ -220,20 +272,26 @@ const dynamicRateLimiter = (limits) => {
 const closeRateLimiter = async () => {
   if (redisClient) {
     try {
+      logger.info('Closing Redis rate limiter connection...');
+      
       if (redisClient.isOpen) {
         await redisClient.quit();
-        logger.info('Redis rate limiter connection closed');
+        logger.info(' Redis rate limiter connection closed gracefully');
+      } else {
+        logger.info('ℹ Redis already closed');
       }
     } catch (err) {
       logger.error('Error closing Redis connection', err);
       try {
         await redisClient.disconnect();
+        logger.info(' Redis forcefully disconnected');
       } catch (disconnectErr) {
         logger.error('Error forcing Redis disconnect', disconnectErr);
       }
     } finally {
       redisClient = null;
       isRedisAvailable = false;
+      reconnectAttempts = 0;
     }
   }
 };
@@ -274,6 +332,15 @@ const resetRateLimit = async (userId, prefix = 'rl:') => {
   }
 };
 
+const getRedisHealth = () => {
+  return {
+    available: isRedisAvailable,
+    connected: redisClient?.isOpen || false,
+    reconnectAttempts,
+    maxReconnectAttempts: MAX_RECONNECT_ATTEMPTS
+  };
+};
+
 module.exports = {
   createRateLimiter,
   authLimiter,
@@ -294,6 +361,7 @@ module.exports = {
   closeRateLimiter,
   getRateLimitInfo,
   resetRateLimit,
+  getRedisHealth, 
   redisClient,
   isRedisAvailable
 };
