@@ -33,18 +33,15 @@ const userSchema = new mongoose.Schema(
         "https://res.cloudinary.com/devatchannel/image/upload/v1602752402/avatar/avatar_cugq40.png",
     },
     coverPhoto: {
-      // [MỚI]
       type: String,
       default: "",
     },
     bio: {
-      // [MỚI]
       type: String,
       default: "",
       maxlength: 200,
     },
     location: {
-      // [MỚI]
       type: String,
       default: "",
     },
@@ -89,7 +86,6 @@ const userSchema = new mongoose.Schema(
       },
     ],
     closeFriends: [
-      // [MỚI] Từ File 2
       {
         type: mongoose.Types.ObjectId,
         ref: "user",
@@ -114,8 +110,10 @@ const userSchema = new mongoose.Schema(
       },
     ],
     reports: [
-      // [MỚI] Cấu trúc chi tiết từ File 2
-      { type: mongoose.Types.ObjectId, ref: "report" },
+      {
+        type: mongoose.Types.ObjectId,
+        ref: "report",
+      },
     ],
     isVerified: {
       type: Boolean,
@@ -124,6 +122,7 @@ const userSchema = new mongoose.Schema(
     },
     verificationToken: String,
     verificationTokenExpires: Date,
+
     isBlocked: {
       type: Boolean,
       default: false,
@@ -135,6 +134,71 @@ const userSchema = new mongoose.Schema(
       ref: "user",
     },
     blockedAt: Date,
+    
+    isBanned: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    bannedReason: String,
+    bannedAt: Date,
+    
+    suspendedUntil: {
+      type: Date,
+      index: true,
+    },
+    
+    blockHistory: [
+      {
+        blockedAt: {
+          type: Date,
+          default: Date.now,
+        },
+        blockedBy: {
+          type: mongoose.Types.ObjectId,
+          ref: "user",
+        },
+        reason: String,
+        actionTaken: {
+          type: String,
+          enum: ["warning", "content_removed", "account_suspended", "account_banned"],
+        },
+        unblockedAt: Date,
+        unblockedBy: {
+          type: mongoose.Types.ObjectId,
+          ref: "user",
+        },
+        reportId: {
+          type: mongoose.Types.ObjectId,
+          ref: "report",
+        },
+      },
+    ],
+    
+    warningCount: {
+      type: Number,
+      default: 0,
+      index: true,
+    },
+    lastWarningAt: Date,
+    warnings: [
+      {
+        warnedAt: {
+          type: Date,
+          default: Date.now,
+        },
+        warnedBy: {
+          type: mongoose.Types.ObjectId,
+          ref: "user",
+        },
+        reason: String,
+        reportId: {
+          type: mongoose.Types.ObjectId,
+          ref: "report",
+        },
+      },
+    ],
+    
     resetPasswordToken: String,
     resetPasswordExpires: Date,
     resetAttempts: {
@@ -186,7 +250,7 @@ const userSchema = new mongoose.Schema(
     lastActive: {
       type: Date,
       default: Date.now,
-      index: true, 
+      index: true,
     },
     twoFactorEnabled: {
       type: Boolean,
@@ -218,11 +282,138 @@ userSchema.index({ createdAt: -1 });
 userSchema.index({ blockedUsers: 1 });
 userSchema.index({ blockedBy: 1 });
 userSchema.index({ isVerified: 1, isBlocked: 1 });
-
 userSchema.index({ username: "text", fullname: "text", email: "text" });
-
 userSchema.index({ role: 1, isBlocked: 1, isVerified: 1 });
-userSchema.index({ lastActive: -1 }); // For online users query
+userSchema.index({ lastActive: -1 });
+
+userSchema.index({ isBlocked: 1, isBanned: 1, suspendedUntil: 1 });
+
+userSchema.methods.isCurrentlyBlocked = function () {
+  if (this.isBanned) return true;
+  if (this.isBlocked) return true;
+  if (this.suspendedUntil && this.suspendedUntil > new Date()) return true;
+  return false;
+};
+
+userSchema.methods.checkAndUnblockIfExpired = async function () {
+  if (this.suspendedUntil && this.suspendedUntil < new Date()) {
+    this.isBlocked = false;
+    this.suspendedUntil = null;
+    this.blockedReason = null;
+    
+    if (this.blockHistory.length > 0) {
+      const lastBlock = this.blockHistory[this.blockHistory.length - 1];
+      if (!lastBlock.unblockedAt) {
+        lastBlock.unblockedAt = new Date();
+        lastBlock.unblockedBy = null; 
+      }
+    }
+    
+    await this.save();
+    return true;
+  }
+  return false;
+};
+
+userSchema.methods.blockUser = async function (blockedBy, reason, actionTaken, reportId, duration = null) {
+  this.isBlocked = true;
+  this.blockedReason = reason;
+  this.blockedByAdmin = blockedBy;
+  this.blockedAt = new Date();
+  
+  if (actionTaken === "account_banned") {
+    this.isBanned = true;
+    this.bannedReason = reason;
+    this.bannedAt = new Date();
+  }
+  
+  if (duration && actionTaken === "account_suspended") {
+    this.suspendedUntil = new Date(Date.now() + duration);
+  }
+  
+  this.tokenVersion = (this.tokenVersion || 0) + 1;
+  
+  this.blockHistory.push({
+    blockedAt: new Date(),
+    blockedBy: blockedBy,
+    reason: reason,
+    actionTaken: actionTaken,
+    reportId: reportId,
+  });
+  
+  await this.save();
+};
+
+userSchema.methods.unblockUser = async function (unblockedBy) {
+  this.isBlocked = false;
+  this.blockedReason = null;
+  this.blockedByAdmin = null;
+  this.blockedAt = null;
+  this.suspendedUntil = null;
+
+  if (this.blockHistory.length > 0) {
+    const lastBlock = this.blockHistory[this.blockHistory.length - 1];
+    if (!lastBlock.unblockedAt) {
+      lastBlock.unblockedAt = new Date();
+      lastBlock.unblockedBy = unblockedBy;
+    }
+  }
+  
+  await this.save();
+};
+
+userSchema.methods.addWarning = async function (warnedBy, reason, reportId) {
+  this.warningCount = (this.warningCount || 0) + 1;
+  this.lastWarningAt = new Date();
+  
+  this.warnings.push({
+    warnedAt: new Date(),
+    warnedBy: warnedBy,
+    reason: reason,
+    reportId: reportId,
+  });
+  
+  await this.save();
+};
+
+userSchema.methods.getBlockStatus = function () {
+  if (this.isBanned) {
+    return {
+      isBlocked: true,
+      type: "permanent_ban",
+      reason: this.bannedReason || this.blockedReason,
+      blockedAt: this.bannedAt || this.blockedAt,
+      canAppeal: true,
+    };
+  }
+  
+  if (this.suspendedUntil && this.suspendedUntil > new Date()) {
+    return {
+      isBlocked: true,
+      type: "temporary_suspension",
+      reason: this.blockedReason,
+      blockedAt: this.blockedAt,
+      expiresAt: this.suspendedUntil,
+      canAppeal: true,
+    };
+  }
+  
+  if (this.isBlocked) {
+    return {
+      isBlocked: true,
+      type: "admin_block",
+      reason: this.blockedReason,
+      blockedAt: this.blockedAt,
+      canAppeal: true,
+    };
+  }
+  
+  return {
+    isBlocked: false,
+    type: null,
+  };
+};
+
 
 userSchema.methods.canResetPassword = function () {
   if (this.resetAttempts >= 5) {
@@ -278,6 +469,24 @@ userSchema.post("save", function (doc) {
       reason: doc.blockedReason,
       blockedBy: doc.blockedByAdmin,
     });
+  }
+});
+
+userSchema.post("find", async function (docs) {
+  if (!docs || docs.length === 0) return;
+  
+  const now = new Date();
+  const toUpdate = docs.filter(
+    (doc) => doc.suspendedUntil && doc.suspendedUntil < now && doc.isBlocked
+  );
+  
+  if (toUpdate.length > 0) {
+    const logger = require("../utils/logger");
+    logger.info(`Auto-unblocking ${toUpdate.length} users with expired suspensions`);
+    
+    for (const user of toUpdate) {
+      await user.checkAndUnblockIfExpired();
+    }
   }
 });
 

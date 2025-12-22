@@ -41,70 +41,49 @@ const declineReportSchema = Joi.object({
   }),
 });
 
+const unblockUserSchema = Joi.object({
+  note: Joi.string().max(500).optional().allow(""),
+});
+
+const updateBlockStatusSchema = Joi.object({
+  action: Joi.string()
+    .valid("block", "ban", "suspend", "unblock")
+    .required()
+    .messages({
+      "any.only": "Invalid action. Must be: block, ban, suspend, or unblock",
+      "any.required": "Action is required",
+    }),
+  reason: Joi.string().min(10).max(500).when("action", {
+    is: Joi.string().valid("block", "ban", "suspend"),
+    then: Joi.required(),
+    otherwise: Joi.optional(),
+  }),
+  duration: Joi.number().min(1).max(8760).when("action", {
+    is: "suspend",
+    then: Joi.required(),
+    otherwise: Joi.optional(),
+  }).messages({
+    "number.min": "Duration must be at least 1 hour",
+    "number.max": "Duration cannot exceed 1 year (8760 hours)",
+  }),
+});
+
+
 router.get("/get_total_users", auth, checkAdmin, adminCtrl.getTotalUsers);
-
 router.get("/get_total_posts", auth, checkAdmin, adminCtrl.getTotalPosts);
-
 router.get("/get_total_comments", auth, checkAdmin, adminCtrl.getTotalComments);
-
 router.get("/get_total_likes", auth, checkAdmin, adminCtrl.getTotalLikes);
+router.get("/get_total_spam_posts", auth, checkAdmin, adminCtrl.getTotalSpamPosts);
 
-router.get(
-  "/get_total_spam_posts",
-  auth,
-  checkAdmin,
-  adminCtrl.getTotalSpamPosts
-);
+router.get("/get_spam_posts", auth, checkAdmin, validatePagination, adminCtrl.getSpamPosts);
+router.get("/spam_post/:id", auth, checkAdmin, validateObjectId("id"), adminCtrl.getSpamPostDetail);
+router.delete("/delete_spam_posts/:id", auth, checkAdmin, validateObjectId("id"), adminCtrl.deleteSpamPost);
 
-router.get(
-  "/get_spam_posts",
-  auth,
-  checkAdmin,
-  validatePagination,
-  adminCtrl.getSpamPosts
-);
-
-router.get(
-  "/spam_post/:id",
-  auth,
-  checkAdmin,
-  validateObjectId("id"),
-  adminCtrl.getSpamPostDetail
-);
-
-router.delete(
-  "/delete_spam_posts/:id",
-  auth,
-  checkAdmin,
-  validateObjectId("id"),
-  adminCtrl.deleteSpamPost
-);
-
-router.get(
-  "/notifications",
-  auth,
-  checkAdmin,
-  validatePagination,
-  adminCtrl.getNotifications
-);
-
-router.get(
-  "/notification/:id",
-  auth,
-  checkAdmin,
-  validateObjectId("id"),
-  adminCtrl.getNotificationDetail
-);
+router.get("/notifications", auth, checkAdmin, validatePagination, adminCtrl.getNotifications);
+router.get("/notification/:id", auth, checkAdmin, validateObjectId("id"), adminCtrl.getNotificationDetail);
 
 router.get("/users", auth, checkAdmin, validatePagination, adminCtrl.getUsers);
-
-router.get(
-  "/user/:id",
-  auth,
-  checkAdmin,
-  validateObjectId("id"),
-  adminCtrl.getUserDetail
-);
+router.get("/user/:id", auth, checkAdmin, validateObjectId("id"), adminCtrl.getUserDetail);
 
 router.post(
   "/admin/user/:id/block",
@@ -124,37 +103,11 @@ router.post(
 );
 
 router.get("/analytics", auth, checkAdmin, adminCtrl.getSiteAnalytics);
+router.get("/recent_activities", auth, checkAdmin, adminCtrl.getRecentActivities);
 
-router.get(
-  "/recent_activities",
-  auth,
-  checkAdmin,
-  adminCtrl.getRecentActivities
-);
-
-router.get(
-  "/reports",
-  auth,
-  checkAdmin,
-  validatePagination,
-  adminCtrl.getAllReports
-);
-
-router.get(
-  "/reports/users",
-  auth,
-  checkAdmin,
-  validatePagination,
-  adminCtrl.getReportedUsers
-);
-
-router.get(
-  "/report/:reportId",
-  auth,
-  checkAdmin,
-  validateObjectId("reportId"),
-  adminCtrl.getReportDetails
-);
+router.get("/reports", auth, checkAdmin, validatePagination, adminCtrl.getAllReports);
+router.get("/reports/users", auth, checkAdmin, validatePagination, adminCtrl.getReportedUsers);
+router.get("/report/:reportId", auth, checkAdmin, validateObjectId("reportId"), adminCtrl.getReportDetails);
 
 router.post(
   "/report/:reportId/accept",
@@ -180,6 +133,54 @@ router.patch(
   checkAdmin,
   validateObjectId("reportId"),
   adminCtrl.markReportAsReviewing
+);
+
+router.get(
+  "/user/:userId/block-history",
+  auth,
+  checkAdmin,
+  validateObjectId("userId"),
+  adminCtrl.getUserBlockHistory
+);
+
+router.post(
+  "/user/:userId/unblock",
+  auth,
+  checkAdmin,
+  validateObjectId("userId"),
+  validate(unblockUserSchema),
+  adminCtrl.unblockUser
+);
+
+router.get(
+  "/blocked-users",
+  auth,
+  checkAdmin,
+  validatePagination,
+  adminCtrl.getBlockedUsers
+);
+
+router.get(
+  "/pending-auto-unblock",
+  auth,
+  checkAdmin,
+  adminCtrl.getPendingAutoUnblock
+);
+
+router.post(
+  "/trigger-auto-unblock",
+  auth,
+  checkAdmin,
+  adminCtrl.triggerAutoUnblockCheck
+);
+
+router.patch(
+  "/user/:userId/block-status",
+  auth,
+  checkAdmin,
+  validateObjectId("userId"),
+  validate(updateBlockStatusSchema),
+  adminCtrl.updateBlockStatus
 );
 
 module.exports = router;

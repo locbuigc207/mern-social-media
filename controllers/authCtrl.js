@@ -62,7 +62,7 @@ const authCtrl = {
 
     try {
       await sendEmail(email, "Verify Your Email - Campus Connect", emailHtml);
-      
+
       res.json({
         msg: "Registration successful! Please check your email to verify your account.",
         user: {
@@ -72,7 +72,7 @@ const authCtrl = {
       });
     } catch (emailError) {
       console.error("Error sending verification email:", emailError);
-      
+
       res.json({
         msg: "Registration successful! However, we couldn't send the verification email. Please request a new verification email.",
         emailError: true,
@@ -96,7 +96,7 @@ const authCtrl = {
 
     if (!user) {
       const expiredUser = await Users.findOne({ verificationToken: token });
-      
+
       if (expiredUser) {
         console.log('⏰ Token found but expired');
         throw new ValidationError("Verification token has expired. Please request a new verification email.");
@@ -195,7 +195,7 @@ const authCtrl = {
         token: user.resetPasswordToken,
         invalidatedAt: new Date()
       });
-      
+
       if (user.previousResetTokens.length > 5) {
         user.previousResetTokens = user.previousResetTokens.slice(-5);
       }
@@ -210,17 +210,17 @@ const authCtrl = {
     user.resetPasswordToken = resetPasswordToken;
     user.resetPasswordExpires = Date.now() + 60 * 60 * 1000;
     user.resetAttempts = (user.resetAttempts || 0) + 1;
-    
+
     if (user.resetAttempts > 5) {
       user.isBlocked = true;
       user.blockedReason = "Too many password reset attempts";
       await user.save();
-      
+
       return res.status(403).json({
         msg: "Account locked due to suspicious activity. Contact support."
       });
     }
-    
+
     await user.save();
 
     const resetLink = `${process.env.CLIENT_URL}/reset-password/${resetToken}`;
@@ -275,7 +275,7 @@ const authCtrl = {
         const isInvalidated = user.previousResetTokens.some(
           old => old.token === resetPasswordToken
         );
-        
+
         if (isInvalidated) {
           await session.abortTransaction();
           throw new ValidationError("This reset link has been invalidated. Please request a new one.");
@@ -289,8 +289,8 @@ const authCtrl = {
       user.resetPasswordExpires = undefined;
       user.resetAttempts = 0;
       user.previousResetTokens = [];
-      user.tokenVersion = (user.tokenVersion || 0) + 1; 
-      
+      user.tokenVersion = (user.tokenVersion || 0) + 1;
+
       await user.save({ session });
       await session.commitTransaction();
 
@@ -341,7 +341,7 @@ const authCtrl = {
 
     await Users.findOneAndUpdate(
       { _id: req.user._id },
-      { 
+      {
         password: newPasswordHash,
         $inc: { tokenVersion: 1 }
       }
@@ -395,12 +395,54 @@ const authCtrl = {
       throw new AuthenticationError("Invalid credentials.");
     }
 
-    if (user.isBlocked) {
-      return res.status(403).json({
-        msg: "Your account has been suspended. Please contact support for assistance.",
+    await user.checkAndUnblockIfExpired();
+    const blockStatus = user.getBlockStatus();
+
+    if (blockStatus.isBlocked) {
+      let errorMessage;
+      let additionalInfo = {
         isBlocked: true,
-        reason: user.blockedReason,
-        blockedAt: user.blockedAt
+        blockType: blockStatus.type,
+        blockedAt: blockStatus.blockedAt,
+        canAppeal: blockStatus.canAppeal,
+      };
+
+      switch (blockStatus.type) {
+        case "permanent_ban":
+          errorMessage = "Your account has been permanently banned.";
+          additionalInfo.reason = blockStatus.reason;
+          additionalInfo.bannedAt = blockStatus.blockedAt;
+          break;
+
+        case "temporary_suspension":
+          const hoursRemaining = Math.ceil(
+            (blockStatus.expiresAt - new Date()) / (1000 * 60 * 60)
+          );
+          const daysRemaining = Math.ceil(hoursRemaining / 24);
+
+          errorMessage = hoursRemaining > 48
+            ? `Your account is suspended for ${daysRemaining} more days.`
+            : `Your account is suspended for ${hoursRemaining} more hours.`;
+
+          additionalInfo.reason = blockStatus.reason;
+          additionalInfo.expiresAt = blockStatus.expiresAt;
+          additionalInfo.hoursRemaining = hoursRemaining;
+          break;
+
+        case "admin_block":
+          errorMessage = "Your account has been suspended. Please contact support for assistance.";
+          additionalInfo.reason = blockStatus.reason;
+          break;
+
+        default:
+          errorMessage = user.blockedReason || "Your account has been suspended.";
+          additionalInfo.reason = user.blockedReason;
+      }
+
+      return res.status(403).json({
+        msg: errorMessage,
+        ...additionalInfo,
+        supportEmail: process.env.SUPPORT_EMAIL || "support@example.com",
       });
     }
 
@@ -408,7 +450,7 @@ const authCtrl = {
       return res.status(400).json({
         msg: "Please verify your email before logging in.",
         requireVerification: true,
-        email: user.email 
+        email: user.email,
       });
     }
 
@@ -420,8 +462,16 @@ const authCtrl = {
     const populatedUser = await Users.findById(user._id)
       .populate("followers following", "-password");
 
-    const access_token = createAccessToken({ id: user._id, version: user.tokenVersion || 0 });
-    const refresh_token = createRefreshToken({ id: user._id, version: user.tokenVersion || 0 });
+    const access_token = createAccessToken({
+      id: user._id,
+      version: user.tokenVersion || 0
+    });
+    const refresh_token = createRefreshToken({
+      id: user._id,
+      version: user.tokenVersion || 0
+    });
+
+    await user.updateLastLogin(req.ip, req.headers['user-agent']);
 
     res.cookie("refreshtoken", refresh_token, {
       httpOnly: true,
@@ -450,10 +500,15 @@ const authCtrl = {
       throw new AuthenticationError("Email or Password is incorrect.");
     }
 
-    if (user.isBlocked) {
+    await user.checkAndUnblockIfExpired();
+    const blockStatus = user.getBlockStatus();
+
+    if (blockStatus.isBlocked) {
       return res.status(403).json({
         msg: "Admin account has been disabled. Contact system administrator.",
-        isBlocked: true
+        isBlocked: true,
+        blockType: blockStatus.type,
+        reason: blockStatus.reason,
       });
     }
 
@@ -462,8 +517,16 @@ const authCtrl = {
       throw new AuthenticationError("Email or Password is incorrect.");
     }
 
-    const access_token = createAccessToken({ id: user._id, version: user.tokenVersion || 0 });
-    const refresh_token = createRefreshToken({ id: user._id, version: user.tokenVersion || 0 });
+    const access_token = createAccessToken({
+      id: user._id,
+      version: user.tokenVersion || 0
+    });
+    const refresh_token = createRefreshToken({
+      id: user._id,
+      version: user.tokenVersion || 0
+    });
+
+    await user.updateLastLogin(req.ip, req.headers['user-agent']);
 
     res.cookie("refreshtoken", refresh_token, {
       httpOnly: true,
@@ -494,7 +557,7 @@ const authCtrl = {
     if (!rf_token) {
       throw new AuthenticationError("Please login again.");
     }
-    
+
     try {
       const result = await new Promise((resolve, reject) => {
         jwt.verify(rf_token, process.env.REFRESH_TOKEN_SECRET, (err, decoded) => {
@@ -515,16 +578,23 @@ const authCtrl = {
         throw new AuthenticationError("Session expired. Please login again.");
       }
 
-      if (user.isBlocked && user.role !== 'admin') {
-        return res.status(403).json({ 
+      await user.checkAndUnblockIfExpired();
+      const blockStatus = user.getBlockStatus();
+
+      if (blockStatus.isBlocked && user.role !== 'admin') {
+        return res.status(403).json({
           msg: "Your account has been blocked.",
-          isBlocked: true 
+          isBlocked: true,
+          blockStatus: blockStatus,
         });
       }
 
-      const access_token = createAccessToken({ id: result.id, version: user.tokenVersion || 0 });
+      const access_token = createAccessToken({
+        id: result.id,
+        version: user.tokenVersion || 0
+      });
       res.json({ access_token, user });
-      
+
     } catch (err) {
       throw new AuthenticationError("Please login again.");
     }

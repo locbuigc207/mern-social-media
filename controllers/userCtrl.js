@@ -391,7 +391,7 @@ const userCtrl = {
         { $addToSet: { following: req.params.id } },
         { new: true, session }
       );
-      
+
       await notificationService.notifyFollow(targetUser, req.user);
 
       await session.commitTransaction();
@@ -499,12 +499,12 @@ const userCtrl = {
     const { reason, description } = req.body;
 
     if (id === req.user._id.toString()) {
-      throw new ValidationError("Bạn không thể tự báo cáo chính mình.");
+      throw new ValidationError("You cannot report yourself.");
     }
 
     const user = await Users.findById(id);
     if (!user) {
-      throw new NotFoundError("Người dùng không tồn tại.");
+      throw new NotFoundError("User not found.");
     }
 
     const existingReport = await Reports.findOne({
@@ -515,45 +515,141 @@ const userCtrl = {
     });
 
     if (existingReport) {
-      throw new ValidationError("Bạn đã gửi báo cáo về người dùng này rồi.");
+      throw new ValidationError("You have already reported this user.");
     }
 
-    const newReport = new Reports({
-      reportType: "user",
-      targetId: id,
-      targetModel: "user",
-      reportedBy: req.user._id,
-      reason,
-      description: description || "Không có mô tả",
-      status: "pending",
-      priority: "medium",
-    });
+    const session = await require("mongoose").startSession();
+    session.startTransaction();
 
-    await newReport.save();
+    try {
+      const newReport = new Reports({
+        reportType: "user",
+        targetId: id,
+        targetModel: "user",
+        reportedBy: req.user._id,
+        reason,
+        description: description || "No description provided",
+        status: "pending",
+        priority: determinePriority(reason),
+      });
 
-    const updatedUser = await Users.findByIdAndUpdate(
-      id,
-      { $push: { reports: newReport._id } },
-      { new: true }
-    );
+      await newReport.save({ session });
 
-    let autoBlocked = false;
+      const updatedUser = await Users.findByIdAndUpdate(
+        id,
+        { $push: { reports: newReport._id } },
+        { new: true, session }
+      );
 
-    if (!updatedUser.isBlocked && updatedUser.reports.length >= 5) {
-      updatedUser.isBlocked = true;
-      updatedUser.blockedReason = `Hệ thống tự động khóa: Nhận ${updatedUser.reports.length} báo cáo vi phạm.`;
-      updatedUser.blockedAt = new Date();
+      let autoBlocked = false;
+      let actionMessage = "Report submitted successfully. We will review it within 24 hours.";
 
-      await updatedUser.save();
-      autoBlocked = true;
+      const pendingReportsCount = await Reports.countDocuments({
+        targetId: id,
+        reportType: "user",
+        status: "pending",
+      }).session(session);
+
+      const criticalReasons = ["child_exploitation", "terrorism", "self_harm", "threats"];
+      const highReasons = ["violence", "harassment", "hate_speech"];
+
+      let shouldAutoBlock = false;
+      let autoBlockReason = "";
+      let suspensionDuration = null;
+
+      if (criticalReasons.includes(reason) && pendingReportsCount >= 2) {
+        shouldAutoBlock = true;
+        autoBlockReason = `Automatic suspension: ${pendingReportsCount} critical violation reports`;
+        suspensionDuration = 7 * 24 * 60 * 60 * 1000;
+      } else if (highReasons.includes(reason) && pendingReportsCount >= 3) {
+        shouldAutoBlock = true;
+        autoBlockReason = `Automatic suspension: ${pendingReportsCount} high-severity reports`;
+        suspensionDuration = 3 * 24 * 60 * 60 * 1000;
+      } else if (pendingReportsCount >= 5) {
+        shouldAutoBlock = true;
+        autoBlockReason = `Automatic suspension: ${pendingReportsCount} violation reports`;
+        suspensionDuration = 24 * 60 * 60 * 1000;
+      }
+
+      if (shouldAutoBlock && !updatedUser.isBlocked) {
+        await updatedUser.blockUser(
+          null,
+          autoBlockReason,
+          "account_suspended",
+          newReport._id,
+          suspensionDuration
+        );
+
+        autoBlocked = true;
+
+        const io = notificationService.getIO();
+        if (io) {
+          io.to(updatedUser._id.toString()).emit("accountBlocked", {
+            reason: autoBlockReason,
+            actionTaken: "account_suspended",
+            blockedAt: updatedUser.blockedAt,
+            expiresAt: updatedUser.suspendedUntil,
+            message: "Your account has been temporarily suspended due to multiple reports.",
+          });
+
+          const sockets = await io.in(updatedUser._id.toString()).fetchSockets();
+          for (const socket of sockets) {
+            socket.emit("forceLogout", {
+              reason: "account_suspended",
+              message: "Your account has been temporarily suspended.",
+            });
+            socket.disconnect(true);
+          }
+        }
+
+        const newNotify = new Notifies({
+          recipients: [updatedUser._id],
+          user: req.user._id,
+          type: "warning",
+          text: "Your account has been temporarily suspended",
+          content: autoBlockReason,
+          url: "/support",
+          isRead: false,
+        });
+        await newNotify.save({ session });
+
+        const admins = await Users.find({ role: "admin" }).select("_id");
+        if (admins.length > 0) {
+          const adminNotify = new Notifies({
+            recipients: admins.map((a) => a._id),
+            user: updatedUser._id,
+            type: "warning",
+            text: "User auto-blocked due to multiple reports",
+            content: `User ${updatedUser.username} has been automatically suspended. Pending reports: ${pendingReportsCount}`,
+            url: `/admin/reports/users/${updatedUser._id}`,
+            isRead: false,
+          });
+          await adminNotify.save({ session });
+        }
+
+        const hours = Math.ceil(suspensionDuration / (1000 * 60 * 60));
+        actionMessage = `Report submitted. The user has been temporarily suspended for ${hours} hours due to multiple reports.`;
+      }
+
+      await session.commitTransaction();
+
+      res.json({
+        msg: actionMessage,
+        report: {
+          _id: newReport._id,
+          reason: newReport.reason,
+          priority: newReport.priority,
+          status: newReport.status,
+        },
+        autoBlocked,
+        pendingReports: pendingReportsCount,
+      });
+    } catch (error) {
+      await session.abortTransaction();
+      throw error;
+    } finally {
+      session.endSession();
     }
-
-    res.json({
-      msg: autoBlocked
-        ? "Đã gửi báo cáo. Tài khoản này đã bị khóa tạm thời do nhận nhiều cảnh báo."
-        : "Báo cáo người dùng thành công. Chúng tôi sẽ xem xét trong 24h.",
-      report: newReport,
-    });
   }),
 
   getFriends: asyncHandler(async (req, res) => {
@@ -568,5 +664,25 @@ const userCtrl = {
     res.json({ friends: user.following });
   }),
 };
+
+function determinePriority(reason) {
+  const priorityMap = {
+    child_exploitation: "critical",
+    terrorism: "critical",
+    self_harm: "critical",
+    threats: "critical",
+    violence: "high",
+    harassment: "high",
+    bullying: "high",
+    hate_speech: "high",
+    nudity: "medium",
+    false_information: "medium",
+    scam: "medium",
+    spam: "low",
+    other: "low",
+  };
+
+  return priorityMap[reason] || "low";
+}
 
 module.exports = userCtrl;

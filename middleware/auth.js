@@ -33,14 +33,59 @@ const auth = async (req, res, next) => {
       throw new AuthenticationError("User not found. Please login again.");
     }
 
-    if (user.isBlocked) {
+    await user.checkAndUnblockIfExpired();
+    
+    const blockStatus = user.getBlockStatus();
+    
+    if (blockStatus.isBlocked) {
       logger.warn('Blocked user attempted access', {
         userId: user._id,
-        username: user.username
+        username: user.username,
+        blockType: blockStatus.type,
+        reason: blockStatus.reason,
       });
-      throw new AuthorizationError(
-        user.blockedReason || "Your account has been blocked. Please contact support."
-      );
+      
+      let errorMessage;
+      
+      switch (blockStatus.type) {
+        case "permanent_ban":
+          errorMessage = `Your account has been permanently banned. Reason: ${blockStatus.reason}. Contact support if you believe this is an error.`;
+          break;
+          
+        case "temporary_suspension":
+          const hoursRemaining = Math.ceil(
+            (blockStatus.expiresAt - new Date()) / (1000 * 60 * 60)
+          );
+          errorMessage = `Your account is suspended for ${hoursRemaining} more hours. Reason: ${blockStatus.reason}.`;
+          break;
+          
+        case "admin_block":
+          errorMessage = `Your account has been blocked. Reason: ${blockStatus.reason}. Please contact support.`;
+          break;
+          
+        default:
+          errorMessage = user.blockedReason || "Your account has been blocked. Please contact support.";
+      }
+      
+      return res.status(403).json({
+        msg: errorMessage,
+        blockStatus: {
+          isBlocked: true,
+          type: blockStatus.type,
+          blockedAt: blockStatus.blockedAt,
+          expiresAt: blockStatus.expiresAt,
+          canAppeal: blockStatus.canAppeal,
+        }
+      });
+    }
+
+    if (user.tokenVersion !== undefined && decoded.version !== user.tokenVersion) {
+      logger.warn('Invalid token version', {
+        userId: user._id,
+        tokenVersion: decoded.version,
+        currentVersion: user.tokenVersion,
+      });
+      throw new AuthenticationError("Your session has been invalidated. Please login again.");
     }
 
     if (process.env.REQUIRE_EMAIL_VERIFICATION === 'true' && !user.isVerified) {
@@ -68,10 +113,12 @@ const checkAdmin = async (req, res, next) => {
       throw new AuthenticationError("Authentication required.");
     }
 
-    if (req.user.isBlocked) {
+    const blockStatus = req.user.getBlockStatus();
+    if (blockStatus.isBlocked) {
       logger.warn('Blocked admin attempted access', {
         adminId: req.user._id,
-        username: req.user.username
+        username: req.user.username,
+        blockType: blockStatus.type,
       });
       throw new AuthorizationError("Admin account is blocked.");
     }
@@ -101,7 +148,8 @@ const checkModerator = async (req, res, next) => {
       throw new AuthenticationError("Authentication required.");
     }
 
-    if (req.user.isBlocked) {
+    const blockStatus = req.user.getBlockStatus();
+    if (blockStatus.isBlocked) {
       throw new AuthorizationError("Your account is blocked.");
     }
 
@@ -176,8 +224,13 @@ const optionalAuth = async (req, res, next) => {
     if (decoded && decoded.id) {
       const user = await Users.findOne({ _id: decoded.id }).select("-password");
       
-      if (user && !user.isBlocked) {
-        req.user = user;
+      if (user) {
+        await user.checkAndUnblockIfExpired();
+        
+        const blockStatus = user.getBlockStatus();
+        if (!blockStatus.isBlocked) {
+          req.user = user;
+        }
       }
     }
 
@@ -207,17 +260,21 @@ const refreshTokenIfNeeded = async (req, res, next) => {
     const expiresIn = decoded.exp - Math.floor(Date.now() / 1000);
     
     if (expiresIn < 300 && expiresIn > 0) {
-      const newToken = jwt.sign(
-        { id: decoded.id },
-        process.env.ACCESS_TOKEN_SECRET,
-        { expiresIn: '1d' }
-      );
-
-      res.setHeader('X-New-Token', newToken);
+      const user = await Users.findById(decoded.id);
       
-      logger.info('Token refreshed', {
-        userId: decoded.id
-      });
+      if (user && !user.getBlockStatus().isBlocked) {
+        const newToken = jwt.sign(
+          { id: decoded.id, version: user.tokenVersion || 0 },
+          process.env.ACCESS_TOKEN_SECRET,
+          { expiresIn: '1d' }
+        );
+
+        res.setHeader('X-New-Token', newToken);
+        
+        logger.info('Token refreshed', {
+          userId: decoded.id
+        });
+      }
     }
 
     next();
