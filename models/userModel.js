@@ -32,6 +32,22 @@ const userSchema = new mongoose.Schema(
       default:
         "https://res.cloudinary.com/devatchannel/image/upload/v1602752402/avatar/avatar_cugq40.png",
     },
+    coverPhoto: {
+      // [MỚI]
+      type: String,
+      default: "",
+    },
+    bio: {
+      // [MỚI]
+      type: String,
+      default: "",
+      maxlength: 200,
+    },
+    location: {
+      // [MỚI]
+      type: String,
+      default: "",
+    },
     role: {
       type: String,
       default: "user",
@@ -72,6 +88,13 @@ const userSchema = new mongoose.Schema(
         ref: "user",
       },
     ],
+    closeFriends: [
+      // [MỚI] Từ File 2
+      {
+        type: mongoose.Types.ObjectId,
+        ref: "user",
+      },
+    ],
     saved: [
       {
         type: mongoose.Types.ObjectId,
@@ -89,6 +112,10 @@ const userSchema = new mongoose.Schema(
         type: mongoose.Types.ObjectId,
         ref: "user",
       },
+    ],
+    reports: [
+      // [MỚI] Cấu trúc chi tiết từ File 2
+      { type: mongoose.Types.ObjectId, ref: "report" },
     ],
     isVerified: {
       type: Boolean,

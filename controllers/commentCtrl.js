@@ -1,6 +1,6 @@
 const Comments = require("../models/commentModel");
 const Posts = require("../models/postModel");
-const Reports = require("../models/reportModel"); 
+const Reports = require("../models/reportModel");
 const logger = require("../utils/logger");
 const { asyncHandler } = require("../middleware/errorHandler");
 const { NotFoundError, ValidationError } = require("../utils/AppError");
@@ -41,6 +41,35 @@ const commentCtrl = {
       { new: true }
     );
 
+    if (post.user.toString() !== req.user._id.toString()) {
+      // Xác định người nhận (Chủ bài viết hoặc người được reply)
+      let recipients = [post.user];
+      let notifyText = "đã bình luận bài viết của bạn.";
+
+      if (reply) {
+        const cm = await Comments.findById(reply);
+        if (cm) {
+          recipients = [cm.user];
+          notifyText = "đã trả lời bình luận của bạn.";
+        }
+      }
+
+      const notify = new Notifies({
+        id: post._id,
+        text: notifyText,
+        recipients: recipients,
+        url: `/post/${post._id}`,
+        content: content,
+
+        // Lấy .url của object ảnh đầu tiên. Nếu không có ảnh thì để chuỗi rỗng.
+        image: post.images && post.images.length > 0 ? post.images[0].url : "",
+
+        user: req.user._id,
+      });
+
+      await notify.save();
+    }
+
     res.json({ newComment });
   }),
 
@@ -64,10 +93,10 @@ const commentCtrl = {
     const comment = await Comments.findOneAndUpdate(
       {
         _id: req.params.id,
-        likes: { $ne: req.user._id }
+        likes: { $ne: req.user._id },
       },
       {
-        $addToSet: { likes: req.user._id }
+        $addToSet: { likes: req.user._id },
       },
       { new: true }
     );
@@ -75,16 +104,16 @@ const commentCtrl = {
     if (!comment) {
       const existingComment = await Comments.findById(req.params.id);
       if (!existingComment) {
-        throw new NotFoundError('Comment');
+        throw new NotFoundError("Comment");
       }
       return res.status(400).json({
-        msg: "You have already liked this comment"
+        msg: "You have already liked this comment",
       });
     }
 
     res.json({
       msg: "Comment liked successfully.",
-      likesCount: comment.likes.length
+      likesCount: comment.likes.length,
     });
   }),
 
@@ -92,10 +121,10 @@ const commentCtrl = {
     const comment = await Comments.findOneAndUpdate(
       {
         _id: req.params.id,
-        likes: req.user._id
+        likes: req.user._id,
       },
       {
-        $pull: { likes: req.user._id }
+        $pull: { likes: req.user._id },
       },
       { new: true }
     );
@@ -103,16 +132,16 @@ const commentCtrl = {
     if (!comment) {
       const existingComment = await Comments.findById(req.params.id);
       if (!existingComment) {
-        throw new NotFoundError('Comment');
+        throw new NotFoundError("Comment");
       }
       return res.status(400).json({
-        msg: "You haven't liked this comment"
+        msg: "You haven't liked this comment",
       });
     }
 
     res.json({
       msg: "Comment unliked successfully.",
-      likesCount: comment.likes.length
+      likesCount: comment.likes.length,
     });
   }),
 
@@ -132,7 +161,7 @@ const commentCtrl = {
         $pull: { comments: req.params.id },
       }
     );
-    
+
     res.json({ msg: "Comment deleted successfully." });
   }),
 
@@ -179,19 +208,20 @@ const commentCtrl = {
     }
 
     const priorityMap = {
-      'self_harm': REPORT_PRIORITY.CRITICAL,
-      'threats': REPORT_PRIORITY.CRITICAL,
-      'violence': REPORT_PRIORITY.HIGH,
-      'harassment': REPORT_PRIORITY.HIGH,
-      'bullying': REPORT_PRIORITY.HIGH,
-      'hate_speech': REPORT_PRIORITY.HIGH,
-      'nudity': REPORT_PRIORITY.MEDIUM,
-      'false_information': REPORT_PRIORITY.MEDIUM,
-      'spam': REPORT_PRIORITY.LOW,
-      'other': REPORT_PRIORITY.LOW
+      self_harm: REPORT_PRIORITY.CRITICAL,
+      threats: REPORT_PRIORITY.CRITICAL,
+      violence: REPORT_PRIORITY.HIGH,
+      harassment: REPORT_PRIORITY.HIGH,
+      bullying: REPORT_PRIORITY.HIGH,
+      hate_speech: REPORT_PRIORITY.HIGH,
+      nudity: REPORT_PRIORITY.MEDIUM,
+      false_information: REPORT_PRIORITY.MEDIUM,
+      spam: REPORT_PRIORITY.LOW,
+      other: REPORT_PRIORITY.LOW,
     };
 
-    const finalPriority = priority || priorityMap[reason] || REPORT_PRIORITY.LOW;
+    const finalPriority =
+      priority || priorityMap[reason] || REPORT_PRIORITY.LOW;
 
     const newReport = new Reports({
       reportType: "comment",
@@ -222,7 +252,7 @@ const commentCtrl = {
         _id: newReport._id,
         reason: newReport.reason,
         priority: newReport.priority,
-        status: newReport.status
+        status: newReport.status,
       },
     });
   }),

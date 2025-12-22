@@ -30,7 +30,7 @@ router.post(
   authCtrl.changePassword
 );
 
-router.get("/verify-email/:token", authCtrl.verifyEmail);
+router.get("/verify_email/:token", authCtrl.verifyEmail);
 
 router.post(
   "/resend-verification",

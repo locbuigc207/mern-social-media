@@ -3,13 +3,14 @@ const { Schema } = mongoose;
 
 const conversationSchema = new Schema(
   {
-    recipients: [{type: mongoose.Types.ObjectId, ref: 'user'}],
+    recipients: [{ type: mongoose.Types.ObjectId, ref: "user" }],
     text: String,
     media: Array,
+
     lastMessage: {
       type: mongoose.Types.ObjectId,
-      ref: 'message'
-    }
+      ref: "message",
+    },
   },
   {
     timestamps: true,

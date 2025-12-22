@@ -7,14 +7,15 @@ const {
   NotFoundError,
   ConflictError,
 } = require("../utils/AppError");
+const Reports = require("../models/reportModel");
 
 const userCtrl = {
   searchUser: asyncHandler(async (req, res) => {
     let searchQuery = req.query.username || "";
 
     searchQuery = searchQuery
-      .replace(/[$.]/g, "") 
-      .replace(/[<>'"]/g, "") 
+      .replace(/[$.]/g, "")
+      .replace(/[<>'"]/g, "")
       .trim();
 
     if (searchQuery.length === 0) {
@@ -149,43 +150,50 @@ const userCtrl = {
   }),
 
   updateUser: asyncHandler(async (req, res) => {
-    const { avatar, fullname, mobile, address, story, website, gender } =
-      req.body;
+    try {
+      const { fullname, bio, location, mobile, address, website, gender } =
+        req.body;
 
-    if (!fullname) {
-      throw new ValidationError("Please add your full name.");
-    }
-
-    if (fullname.length > 25) {
-      throw new ValidationError("Full name cannot exceed 25 characters.");
-    }
-
-    if (story && story.length > 200) {
-      throw new ValidationError("Bio cannot exceed 200 characters.");
-    }
-
-    if (website && website.trim()) {
-      try {
-        new URL(website);
-      } catch (e) {
-        throw new ValidationError("Please enter a valid website URL.");
+      if (!fullname) {
+        return res.status(400).json({ msg: "Please add your full name." });
       }
-    }
 
-    await Users.findOneAndUpdate(
-      { _id: req.user._id },
-      {
-        avatar,
-        fullname: fullname.trim(),
-        mobile,
-        address,
-        story: story ? story.trim() : "",
-        website: website ? website.trim() : "",
-        gender,
+      const updateData = {
+        fullname: fullname,
+        bio: bio || "",
+        location: location || "",
+        mobile: mobile || "",
+        address: address || "",
+        website: website || "",
+        gender: gender || "male",
+      };
+
+      // Handle local file uploads
+      if (req.files) {
+        const port = process.env.PORT || 4000;
+        const baseUrl = `http://localhost:${port}/uploads`;
+
+        if (req.files.avatar && req.files.avatar[0]) {
+          updateData.avatar = `${baseUrl}/${req.files.avatar[0].filename}`;
+        }
+
+        if (req.files.coverPhoto && req.files.coverPhoto[0]) {
+          updateData.coverPhoto = `${baseUrl}/${req.files.coverPhoto[0].filename}`;
+        }
       }
-    );
 
-    res.json({ msg: "Profile updated successfully." });
+      const user = await Users.findByIdAndUpdate(req.user._id, updateData, {
+        new: true,
+      }).select("-password");
+
+      res.json({
+        msg: "Profile updated successfully.",
+        user,
+      });
+    } catch (err) {
+      console.error(" Update user error:", err);
+      return res.status(500).json({ msg: err.message });
+    }
   }),
 
   updatePrivacySettings: asyncHandler(async (req, res) => {
@@ -200,7 +208,8 @@ const userCtrl = {
 
     const privacySettings = {};
 
-    if (profileVisibility) privacySettings.profileVisibility = profileVisibility;
+    if (profileVisibility)
+      privacySettings.profileVisibility = profileVisibility;
     if (whoCanMessage) privacySettings.whoCanMessage = whoCanMessage;
     if (whoCanComment) privacySettings.whoCanComment = whoCanComment;
     if (whoCanTag) privacySettings.whoCanTag = whoCanTag;
@@ -480,6 +489,80 @@ const userCtrl = {
     return res.json({
       users,
       result: users.length,
+    });
+  }),
+  reportUser: asyncHandler(async (req, res) => {
+    const { id } = req.params; // ID của người bị báo cáo (Target)
+    const { reason, description } = req.body;
+
+    // 1. Validate: Không được tự báo cáo chính mình
+    if (id === req.user._id.toString()) {
+      throw new ValidationError("Bạn không thể tự báo cáo chính mình.");
+    }
+
+    // 2. Kiểm tra User tồn tại
+    const user = await Users.findById(id);
+    if (!user) {
+      throw new NotFoundError("Người dùng không tồn tại.");
+    }
+
+    // 3. Kiểm tra trùng lặp (Người này đã báo cáo User kia chưa và đơn còn đang treo)
+    const existingReport = await Reports.findOne({
+      reportType: "user",
+      targetId: id,
+      reportedBy: req.user._id,
+      status: "pending", // Chỉ chặn nếu đơn cũ chưa được Admin xử lý
+    });
+
+    if (existingReport) {
+      throw new ValidationError("Bạn đã gửi báo cáo về người dùng này rồi.");
+    }
+
+    // 4. TẠO REPORT MỚI (Lưu vào Collection Reports)
+    const newReport = new Reports({
+      reportType: "user",
+      targetId: id,
+      targetModel: "user",
+      reportedBy: req.user._id,
+      reason,
+      description: description || "Không có mô tả",
+      status: "pending",
+      priority: "medium", // Mặc định là medium
+    });
+
+    await newReport.save();
+
+    // 5. CẬP NHẬT USER (Push ID Report vào mảng & Kiểm tra Auto-Block)
+    // Dùng { new: true } để lấy dữ liệu mới nhất sau khi update
+    const updatedUser = await Users.findByIdAndUpdate(
+      id,
+      { $push: { reports: newReport._id } },
+      { new: true }
+    );
+
+    let autoBlocked = false;
+
+    // --- LOGIC TỰ ĐỘNG KHÓA ---
+    // Điều kiện: Chưa bị khóa VÀ số lượng report >= ngưỡng
+    if (!updatedUser.isBlocked && updatedUser.reports.length >= 5) {
+      updatedUser.isBlocked = true;
+      updatedUser.blockedReason = `Hệ thống tự động khóa: Nhận ${updatedUser.reports.length} báo cáo vi phạm.`;
+      updatedUser.blockedAt = new Date();
+
+      // Lưu ý: blockedByAdmin trong Schema của bạn là ObjectId (ref User).
+      // Vì đây là hệ thống khóa, ta không gán ID admin cụ thể, hoặc gán ID của Super Admin nếu có.
+      // Ở đây ta để trống trường blockedByAdmin, chỉ dựa vào blockedReason để biết là System.
+
+      await updatedUser.save();
+      autoBlocked = true;
+    }
+
+    // 6. Phản hồi
+    res.json({
+      msg: autoBlocked
+        ? "Đã gửi báo cáo. Tài khoản này đã bị khóa tạm thời do nhận nhiều cảnh báo."
+        : "Báo cáo người dùng thành công. Chúng tôi sẽ xem xét trong 24h.",
+      report: newReport,
     });
   }),
 

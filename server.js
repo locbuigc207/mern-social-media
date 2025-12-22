@@ -26,16 +26,28 @@ const app = express();
 
 app.use(
   helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" }, //DEBUG
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
         styleSrc: ["'self'", "'unsafe-inline'"],
         scriptSrc: ["'self'"],
-        imgSrc: ["'self'", "data:", "https://res.cloudinary.com"],
+        imgSrc: [
+          "'self'",
+          "data:",
+          "blob:",
+          "https://res.cloudinary.com",
+          "http://localhost:4000",
+          "http://localhost:5000",
+        ],
         connectSrc: [
           "'self'",
+          "ws:",
+          "wss:",
           process.env.CLIENT_URL || "http://localhost:3000",
+          "http://localhost:5173",
         ],
+        mediaSrc: ["'self'", "https://res.cloudinary.com", "blob:"],
       },
     },
     hsts: {
@@ -55,6 +67,9 @@ app.use(xss());
 const allowedOrigins = [
   process.env.CLIENT_URL || "http://localhost:3000",
   "http://localhost:3000",
+  "http://localhost:5173",
+  "http://127.0.0.1:3000",
+  "http://127.0.0.1:5173",
 ];
 
 app.use(
@@ -136,7 +151,18 @@ app.get("/health", async (req, res) => {
 
   res.status(allServicesHealthy ? 200 : 503).json(health);
 });
-
+app.get("/api", (req, res) => {
+  res.json({
+    message: "Social Network API is running!",
+    version: "1.0.0",
+    endpoints: {
+      auth: "/api/register, /api/login, /api/logout",
+      users: "/api/user/:id, /api/search",
+      posts: "/api/posts, /api/post/:id",
+      comments: "/api/comment",
+    },
+  });
+});
 app.use("/api", require("./routes/authRouter"));
 app.use("/api", require("./routes/userRouter"));
 app.use("/api", require("./routes/postRouter"));
@@ -211,9 +237,7 @@ const validateEnv = () => {
     );
 
     if (cloudinaryMissing.length > 0) {
-      logger.warn(
-        `Cloudinary not configured: ${cloudinaryMissing.join(", ")}`
-      );
+      logger.warn(`Cloudinary not configured: ${cloudinaryMissing.join(", ")}`);
     }
   }
 
@@ -368,12 +392,12 @@ process.on("unhandledRejection", (reason, promise) => {
   shutdown("unhandledRejection");
 });
 
-const SHUTDOWN_TIMEOUT = parseInt(process.env.SHUTDOWN_TIMEOUT) || 30000;
-const forceShutdownTimer = setTimeout(() => {
-  logger.error(`Forced shutdown after ${SHUTDOWN_TIMEOUT}ms timeout`);
-  process.exit(1);
-}, SHUTDOWN_TIMEOUT);
-forceShutdownTimer.unref();
+// const SHUTDOWN_TIMEOUT = parseInt(process.env.SHUTDOWN_TIMEOUT) || 30000;
+// const forceShutdownTimer = setTimeout(() => {
+//   logger.error(`Forced shutdown after ${SHUTDOWN_TIMEOUT}ms timeout`);
+//   process.exit(1);
+// }, SHUTDOWN_TIMEOUT);
+// forceShutdownTimer.unref();
 
 startServer();
 

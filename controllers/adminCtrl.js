@@ -83,15 +83,24 @@ const adminCtrl = {
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
 
+    // 1. Dùng Aggregate để lấy chi tiết từng report
     const reportedPostsData = await Reports.aggregate([
       { $match: { reportType: "post", status: "pending" } },
+      { $sort: { createdAt: -1 } },
       {
         $group: {
           _id: "$targetId",
           count: { $sum: 1 },
           latestReport: { $max: "$createdAt" },
-          reasons: { $addToSet: "$reason" },
-          reporterIds: { $addToSet: "$reportedBy" },
+          // QUAN TRỌNG: Dùng $push để giữ nguyên từng report riêng lẻ
+          detailedReports: {
+            $push: {
+              reason: "$reason",
+              description: "$description",
+              reportedBy: "$reportedBy",
+              createdAt: "$createdAt",
+            },
+          },
         },
       },
       { $match: { count: { $gt: 0 } } },
@@ -100,31 +109,57 @@ const adminCtrl = {
       { $limit: limit },
     ]);
 
+    // 2. Lấy danh sách ID bài viết
     const postIds = reportedPostsData.map((item) => item._id);
 
+    // 3. Tìm thông tin bài viết gốc
     const posts = await Posts.find({ _id: { $in: postIds } })
       .select("user createdAt content images reports")
-      .populate({
-        path: "user",
-        select: "username avatar email fullname",
-      });
+      .populate("user", "username avatar email fullname");
 
+    // 4. Ghép dữ liệu và Populate thông tin người báo cáo thủ công
     const finalPosts = await Promise.all(
       posts.map(async (post) => {
-        const reportData = reportedPostsData.find(
+        const reportGroup = reportedPostsData.find(
           (r) => r._id.toString() === post._id.toString()
         );
         const postObj = post.toObject();
 
-        postObj.reportCountReal = reportData ? reportData.count : 0;
-        postObj.reportReasons = reportData ? reportData.reasons : [];
+        if (reportGroup) {
+          postObj.reportCountReal = reportGroup.count;
 
-        if (reportData && reportData.reporterIds) {
-          const reporters = await Users.find({
-            _id: { $in: reportData.reporterIds },
-          }).select("username avatar");
-          postObj.reporters = reporters;
+          // Lấy danh sách ID của những người báo cáo trong nhóm này
+          const reporterIds = reportGroup.detailedReports.map(
+            (d) => d.reportedBy
+          );
+
+          // Tìm info user từ DB
+          const usersInfo = await Users.find({
+            _id: { $in: reporterIds },
+          }).select("username avatar email");
+
+          // Map thông tin user vào từng dòng report chi tiết
+          postObj.detailedReports = reportGroup.detailedReports.map(
+            (detail) => {
+              const user = usersInfo.find(
+                (u) => u._id.toString() === detail.reportedBy.toString()
+              );
+              return {
+                ...detail,
+                reporter: user || { username: "Người dùng ẩn", avatar: "" },
+              };
+            }
+          );
+
+          // Giữ lại các trường cũ để tương thích với Table bên ngoài
+          postObj.reportReasons = [
+            ...new Set(postObj.detailedReports.map((d) => d.reason)),
+          ];
+          postObj.reporters = usersInfo;
         } else {
+          postObj.reportCountReal = 0;
+          postObj.detailedReports = [];
+          postObj.reportReasons = [];
           postObj.reporters = [];
         }
 
@@ -135,12 +170,6 @@ const adminCtrl = {
     const total = await Reports.distinct("targetId", {
       reportType: "post",
       status: "pending",
-    });
-
-    logger.info("Spam posts retrieved via Reports Aggregation", {
-      total: total.length,
-      page,
-      adminId: req.user._id,
     });
 
     res.json({
@@ -726,14 +755,33 @@ const adminCtrl = {
     if (priority) {
       query.priority = priority;
     }
+    // Mặc định: Chỉ lấy thông tin của đối tượng bị báo cáo (Post/User/Comment)
+    let targetPopulateOption = {
+      path: "targetId",
+      select: "content username email avatar images user fullname isBlocked", // Chọn các trường cần hiển thị
+    };
 
+    // LOGIC: Chỉ populate lồng (lấy tác giả) khi đối tượng là Post hoặc Comment.
+    // Nếu là User, ta không làm gì thêm (tránh lỗi StrictPopulateError vì User không có field 'user' con)
+    if (reportType === "post" || reportType === "comment") {
+      targetPopulateOption.populate = {
+        path: "user",
+        select: "username avatar email fullname",
+      };
+    } else if (!reportType) {
+      // Trường hợp lấy TẤT CẢ (không lọc):
+      // Ta vẫn muốn hiện tác giả cho Post, nhưng phải dùng strictPopulate: false
+      // để Mongoose không báo lỗi khi gặp document là User.
+      targetPopulateOption.populate = {
+        path: "user",
+        select: "username avatar email fullname",
+        strictPopulate: false, // <--- QUAN TRỌNG: Bỏ qua lỗi nếu không tìm thấy field 'user'
+      };
+    }
     const reports = await Reports.find(query)
-      .populate("reportedBy", "username avatar email")
-      .populate("reviewedBy", "username avatar")
-      .populate({
-        path: "targetId",
-        select: "content username email avatar images user",
-      })
+      .populate("reportedBy", "username avatar email") // Người đi báo cáo
+      .populate("reviewedBy", "username avatar") // Admin xử lý
+      .populate(targetPopulateOption) // <--- Dùng options đã cấu hình ở trên
       .sort("-priority -createdAt")
       .skip(skip)
       .limit(limit);
@@ -798,23 +846,47 @@ const adminCtrl = {
   getReportDetails: asyncHandler(async (req, res) => {
     const { reportId } = req.params;
 
-    const report = await Reports.findById(reportId)
+    // 1. Lấy Report cơ bản trước (chưa populate targetId sâu)
+    let report = await Reports.findById(reportId)
       .populate("reportedBy", "username avatar email fullname")
-      .populate("reviewedBy", "username avatar email")
-      .populate({
+      .populate("reviewedBy", "username avatar email");
+
+    if (!report) {
+      throw new NotFoundError("Report");
+    }
+
+    // 2. Xử lý Populate Dynamic dựa trên targetModel
+    // Nếu đối tượng bị báo cáo là Post hoặc Comment -> Cần lấy thông tin tác giả (user)
+    if (report.targetModel === "post" || report.targetModel === "comment") {
+      await report.populate({
         path: "targetId",
         populate: {
           path: "user",
           select: "username avatar email fullname",
         },
       });
-
-    if (!report) {
-      throw new NotFoundError("Report");
+    }
+    // Nếu đối tượng bị báo cáo là User -> Chỉ cần lấy thông tin của User đó
+    else if (report.targetModel === "user") {
+      await report.populate({
+        path: "targetId",
+        select: "username avatar email fullname isBlocked", // Lấy các trường của User profile
+      });
+    }
+    // Nếu là Message (Tùy schema của bạn, thường là sender)
+    else if (report.targetModel === "message") {
+      await report.populate({
+        path: "targetId",
+        populate: {
+          path: "sender", // Message thường dùng sender thay vì user
+          select: "username avatar email",
+        },
+      });
     }
 
+    // 3. Lấy các báo cáo liên quan (Cùng targetId)
     const relatedReports = await Reports.find({
-      targetId: report.targetId,
+      targetId: report.targetId._id, // Lưu ý: targetId giờ là object đã populate
       reportType: report.reportType,
       _id: { $ne: reportId },
     })
@@ -822,12 +894,16 @@ const adminCtrl = {
       .sort("-createdAt")
       .limit(10);
 
-    const reporterHistory = await Reports.find({
-      reportedBy: report.reportedBy._id,
-    })
-      .select("reportType status createdAt")
-      .sort("-createdAt")
-      .limit(5);
+    // 4. Lấy lịch sử người báo cáo (Kiểm tra xem người báo cáo còn tồn tại không)
+    let reporterHistory = [];
+    if (report.reportedBy && report.reportedBy._id) {
+      reporterHistory = await Reports.find({
+        reportedBy: report.reportedBy._id,
+      })
+        .select("reportType status createdAt description reason") // Thêm reason để hiển thị rõ hơn
+        .sort("-createdAt")
+        .limit(5);
+    }
 
     logger.info("Report details retrieved", {
       reportId,
@@ -844,7 +920,6 @@ const adminCtrl = {
       },
     });
   }),
-
   markReportAsReviewing: asyncHandler(async (req, res) => {
     const { reportId } = req.params;
 

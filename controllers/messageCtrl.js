@@ -3,36 +3,89 @@ const Messages = require("../models/messageModel");
 const Users = require("../models/userModel");
 const logger = require("../utils/logger");
 const { asyncHandler } = require("../middleware/errorHandler");
-const { NotFoundError, ValidationError, AuthorizationError } = require("../utils/AppError");
+const {
+  NotFoundError,
+  ValidationError,
+  AuthorizationError,
+} = require("../utils/AppError");
 const APIfeatures = require("../utils/APIfeatures");
 
 const messageCtrl = {
+  // 1. Tạo tin nhắn (Merge: Upload file + Privacy Check + Logic tạo)
   createMessage: asyncHandler(async (req, res) => {
-    const { recipient, text, media, call } = req.body;
+    const { recipient, text, call } = req.body;
 
+    // --- XỬ LÝ MEDIA (Từ File 2) ---
+    // Kiểm tra nếu có file upload từ Multer
+    let media = [];
+    if (req.files && req.files.length > 0) {
+      // Xây dựng URL động dựa trên host hiện tại
+      const protocol = req.protocol;
+      const host = req.get("host"); // localhost:4000 hoặc domain
+
+      media = req.files.map((file) => ({
+        url: `${protocol}://${host}/uploads/${file.filename}`,
+        type: file.mimetype.startsWith("video/") ? "video" : "image",
+      }));
+    } else if (req.body.media) {
+      // Trường hợp gửi link media trực tiếp (ít dùng nhưng hỗ trợ fallback)
+      media = req.body.media;
+    }
+
+    // --- VALIDATION CƠ BẢN ---
     if (!recipient) {
       throw new ValidationError("Recipient is required.");
     }
 
-    if (!text && !media && !call) {
-      throw new ValidationError("Message cannot be empty.");
+    if ((!text || !text.trim()) && media.length === 0 && !call) {
+      throw new ValidationError(
+        "Message content (text, media, or call) is required."
+      );
     }
 
+    // --- KIỂM TRA USER & QUYỀN RIÊNG TƯ ---
     const recipientUser = await Users.findById(recipient);
     if (!recipientUser) {
       throw new NotFoundError("Recipient user");
     }
 
+    // Check Block (2 chiều)
     if (recipientUser.blockedUsers.includes(req.user._id)) {
-      throw new AuthorizationError("You cannot send messages to this user.");
+      throw new AuthorizationError(
+        "You cannot send messages to this user (Blocked)."
+      );
     }
 
+    // Check nếu mình block họ (Logic File 1)
     const currentUser = await Users.findById(req.user._id);
     if (currentUser.blockedUsers.includes(recipient)) {
       throw new AuthorizationError("You have blocked this user.");
     }
 
-    const newConversation = await Conversations.findOneAndUpdate(
+    // --- CHECK QUYỀN RIÊNG TƯ (Từ File 2) ---
+    // 1. Nếu user chặn tin nhắn hoàn toàn
+    if (
+      recipientUser.privacySettings &&
+      recipientUser.privacySettings.whoCanMessage === "none"
+    ) {
+      throw new AuthorizationError("This user doesn't accept messages.");
+    }
+
+    // 2. Nếu user chỉ nhận tin từ người follow
+    if (
+      recipientUser.privacySettings &&
+      recipientUser.privacySettings.whoCanMessage === "following"
+    ) {
+      // Kiểm tra xem mình (req.user._id) có nằm trong danh sách followers của họ không
+      if (!recipientUser.followers.includes(req.user._id)) {
+        throw new AuthorizationError(
+          "You must be followed by this user to send messages."
+        );
+      }
+    }
+
+    // --- TẠO CONVERSATION ---
+    let conversation = await Conversations.findOneAndUpdate(
       {
         $or: [
           { recipients: [req.user._id, recipient] },
@@ -40,38 +93,46 @@ const messageCtrl = {
         ],
       },
       {
-        recipients: [req.user._id, recipient],
-        text,
-        media,
-        call,
+        $setOnInsert: { recipients: [req.user._id, recipient] },
       },
       { new: true, upsert: true }
     );
 
+    // --- TẠO MESSAGE ---
     const newMessage = new Messages({
-      conversation: newConversation._id,
+      conversation: conversation._id,
       sender: req.user._id,
       recipient,
-      text,
+      text: text || "",
       media,
       call,
     });
 
     await newMessage.save();
-
-    logger.info('Message sent', {
-      messageId: newMessage._id,
-      sender: req.user._id,
-      recipient
+    await Conversations.findByIdAndUpdate(conversation._id, {
+      $set: {
+        recipients: [req.user._id, recipient], // Đẩy lên đầu nếu sort
+        text: text || (media.length > 0 ? "Sent attachments" : "Call"),
+        media,
+        call,
+        lastMessage: newMessage._id, // <--- QUAN TRỌNG: Lưu ID tin nhắn vào đây
+      },
     });
 
-    res.json({ 
+    logger.info("Message sent", {
+      messageId: newMessage._id,
+      sender: req.user._id,
+      recipient,
+    });
+
+    res.json({
       msg: "Message sent successfully!",
       message: newMessage,
-      conversation: newConversation
+      conversation: conversation,
     });
   }),
 
+  // 2. Lấy danh sách hội thoại
   getConversations: asyncHandler(async (req, res) => {
     const features = new APIfeatures(
       Conversations.find({
@@ -87,19 +148,24 @@ const messageCtrl = {
         path: "lastMessage",
         populate: {
           path: "sender",
-          select: "username avatar"
-        }
+          select: "username avatar",
+        },
       });
-
+    // Lọc bỏ những hội thoại với người đã block/bị block
     const currentUser = await Users.findById(req.user._id);
-    const filteredConversations = conversations.filter(conv => {
+    const filteredConversations = conversations.filter((conv) => {
       const otherUser = conv.recipients.find(
-        r => r._id.toString() !== req.user._id.toString()
+        (r) => r._id.toString() !== req.user._id.toString()
       );
-      
-      return otherUser && 
-        !currentUser.blockedUsers.includes(otherUser._id) &&
-        !currentUser.blockedBy.includes(otherUser._id);
+
+      // Giữ lại hội thoại nếu người kia tồn tại VÀ không có block 2 chiều
+      // (Lưu ý: Logic này tùy product, có thể bạn vẫn muốn hiện chat cũ dù đã block)
+      if (!otherUser) return false;
+
+      const isBlockedByMe = currentUser.blockedUsers.includes(otherUser._id);
+      // currentUser.blockedBy (nếu schema có) hoặc check logic ngược lại
+      // Tạm thời dùng blockedUsers theo Schema chuẩn
+      return !isBlockedByMe;
     });
 
     res.json({
@@ -108,6 +174,7 @@ const messageCtrl = {
     });
   }),
 
+  // 3. Lấy tin nhắn của 1 hội thoại
   getMessages: asyncHandler(async (req, res) => {
     const features = new APIfeatures(
       Messages.find({
@@ -115,21 +182,22 @@ const messageCtrl = {
           { sender: req.user._id, recipient: req.params.id },
           { sender: req.params.id, recipient: req.user._id },
         ],
-        deletedBy: { $ne: req.user._id }
+        deletedBy: { $ne: req.user._id }, // Không lấy tin nhắn mình đã xóa
       }),
       req.query
     ).paginating();
 
     const messages = await features.query
-      .sort("-createdAt")
+      .sort("-createdAt") // Lấy mới nhất trước để phân trang đúng
       .populate("sender recipient", "avatar username fullname");
 
     res.json({
-      messages: messages.reverse(),
+      messages: messages.reverse(), // Đảo ngược lại để hiển thị từ trên xuống (cũ -> mới)
       result: messages.length,
     });
   }),
 
+  // 4. Xóa tin nhắn (Soft Delete & Hard Delete)
   deleteMessage: asyncHandler(async (req, res) => {
     const message = await Messages.findById(req.params.messageId);
 
@@ -141,111 +209,104 @@ const messageCtrl = {
       message.sender.toString() !== req.user._id.toString() &&
       message.recipient.toString() !== req.user._id.toString()
     ) {
-      throw new AuthorizationError("You can only delete messages in your conversations.");
+      throw new AuthorizationError(
+        "You can only delete messages in your conversations."
+      );
     }
 
+    // Thêm người xóa vào mảng deletedBy
     if (!message.deletedBy.includes(req.user._id)) {
       message.deletedBy.push(req.user._id);
     }
 
+    // Kiểm tra nếu cả 2 đều xóa -> Xóa vĩnh viễn khỏi DB
     const bothParticipants = [
-      message.sender.toString(), 
-      message.recipient.toString()
+      message.sender.toString(),
+      message.recipient.toString(),
     ];
-    
-    const allDeleted = bothParticipants.every(userId => 
-      message.deletedBy.some(deletedUserId => 
-        deletedUserId.toString() === userId
+
+    const allDeleted = bothParticipants.every((userId) =>
+      message.deletedBy.some(
+        (deletedUserId) => deletedUserId.toString() === userId
       )
     );
 
     if (allDeleted) {
       await Messages.findByIdAndDelete(req.params.messageId);
-      
-      logger.info('Message permanently deleted', {
-        messageId: req.params.messageId
+      logger.info("Message permanently deleted", {
+        messageId: req.params.messageId,
       });
-      
-      return res.json({ 
-        msg: "Message deleted successfully.",
-        permanent: true
-      });
+      return res.json({ msg: "Message deleted permanently.", permanent: true });
     }
 
     await message.save();
-
-    logger.info('Message soft deleted', {
+    logger.info("Message soft deleted", {
       messageId: req.params.messageId,
-      userId: req.user._id
+      userId: req.user._id,
     });
 
-    res.json({ 
-      msg: "Message deleted successfully.",
-      permanent: false
-    });
+    res.json({ msg: "Message deleted successfully.", permanent: false });
   }),
 
+  // 5. Xóa cả cuộc trò chuyện
   deleteConversation: asyncHandler(async (req, res) => {
     const conversation = await Conversations.findOne({
-      recipients: { $all: [req.user._id, req.params.userId] }
+      recipients: { $all: [req.user._id, req.params.userId] },
     });
 
     if (!conversation) {
       throw new NotFoundError("Conversation");
     }
 
+    // 1. Soft delete tất cả message
     await Messages.updateMany(
       {
         conversation: conversation._id,
-        deletedBy: { $ne: req.user._id }
+        deletedBy: { $ne: req.user._id },
       },
       {
-        $addToSet: { deletedBy: req.user._id }
+        $addToSet: { deletedBy: req.user._id },
       }
     );
 
-    const allMessagesDeleted = await Messages.countDocuments({
+    // 2. Kiểm tra xem có thể xóa vĩnh viễn conversation không
+    // (Nếu tất cả message bên trong đều đã bị cả 2 bên xóa)
+    const activeMessagesCount = await Messages.countDocuments({
       conversation: conversation._id,
-      $expr: { $lt: [{ $size: "$deletedBy" }, 2] }
+      $expr: { $lt: [{ $size: "$deletedBy" }, 2] }, // Vẫn còn người chưa xóa
     });
 
-    if (allMessagesDeleted === 0) {
+    if (activeMessagesCount === 0) {
+      // Xóa sạch sẽ
       await Messages.deleteMany({ conversation: conversation._id });
       await Conversations.findByIdAndDelete(conversation._id);
-      
-      logger.info('Conversation permanently deleted', {
+
+      logger.info("Conversation permanently deleted", {
         conversationId: conversation._id,
-        users: [req.user._id, req.params.userId]
       });
-      
-      return res.json({ 
+      return res.json({
         msg: "Conversation deleted permanently.",
-        permanent: true
+        permanent: true,
       });
     }
 
-    logger.info('Conversation soft deleted', {
+    logger.info("Conversation soft deleted", {
       conversationId: conversation._id,
-      userId: req.user._id
     });
-
-    res.json({ 
-      msg: "Conversation deleted successfully.",
-      permanent: false
-    });
+    res.json({ msg: "Conversation deleted successfully.", permanent: false });
   }),
 
+  // 6. Đánh dấu đã đọc 1 tin nhắn
   markAsRead: asyncHandler(async (req, res) => {
     const { messageId } = req.params;
-
     const message = await Messages.findById(messageId);
 
-    if (!message) {
-      throw new NotFoundError("Message");
-    }
+    if (!message) throw new NotFoundError("Message");
 
     if (message.recipient.toString() !== req.user._id.toString()) {
-      throw new AuthorizationError("You can only mark messages sent to you as read.");
+      throw new AuthorizationError(
+        "You can only mark messages sent to you as read."
+      );
     }
 
     if (message.isRead) {
@@ -256,21 +317,17 @@ const messageCtrl = {
     message.readAt = new Date();
     await message.save();
 
-    logger.info('Message marked as read', {
-      messageId,
-      userId: req.user._id
-    });
-
-    res.json({ 
+    res.json({
       msg: "Message marked as read.",
       message: {
         _id: message._id,
         isRead: message.isRead,
-        readAt: message.readAt
-      }
+        readAt: message.readAt,
+      },
     });
   }),
 
+  // 7. Đánh dấu tất cả là đã đọc (trong 1 cuộc hội thoại)
   markAllAsRead: asyncHandler(async (req, res) => {
     const { userId } = req.params;
 
@@ -279,40 +336,31 @@ const messageCtrl = {
         sender: userId,
         recipient: req.user._id,
         isRead: false,
-        deletedBy: { $ne: req.user._id }
+        deletedBy: { $ne: req.user._id },
       },
       {
-        $set: {
-          isRead: true,
-          readAt: new Date()
-        }
+        $set: { isRead: true, readAt: new Date() },
       }
     );
 
-    logger.info('All messages marked as read', {
-      fromUser: userId,
-      toUser: req.user._id,
-      count: result.modifiedCount
-    });
-
-    res.json({ 
+    res.json({
       msg: `${result.modifiedCount} message(s) marked as read.`,
-      count: result.modifiedCount
+      count: result.modifiedCount,
     });
   }),
 
+  // 8. Đếm tổng tin nhắn chưa đọc
   getUnreadCount: asyncHandler(async (req, res) => {
     const count = await Messages.countDocuments({
       recipient: req.user._id,
       isRead: false,
-      deletedBy: { $ne: req.user._id }
+      deletedBy: { $ne: req.user._id },
     });
 
-    res.json({ 
-      unreadCount: count 
-    });
+    res.json({ unreadCount: count });
   }),
 
+  // 9. Đếm tin nhắn chưa đọc của 1 người cụ thể
   getUnreadByConversation: asyncHandler(async (req, res) => {
     const { userId } = req.params;
 
@@ -320,15 +368,13 @@ const messageCtrl = {
       sender: userId,
       recipient: req.user._id,
       isRead: false,
-      deletedBy: { $ne: req.user._id }
+      deletedBy: { $ne: req.user._id },
     });
 
-    res.json({ 
-      unreadCount: count,
-      conversationWith: userId
-    });
+    res.json({ unreadCount: count, conversationWith: userId });
   }),
 
+  // 10. Tìm kiếm tin nhắn (Tính năng của File 1)
   searchMessages: asyncHandler(async (req, res) => {
     const { query, conversationWith } = req.query;
     const page = parseInt(req.query.page) || 1;
@@ -339,60 +385,48 @@ const messageCtrl = {
       throw new ValidationError("Search query must be at least 2 characters.");
     }
 
-    const sanitizedQuery = query.trim().replace(/[$.]/g, '');
+    const sanitizedQuery = query.trim().replace(/[$.]/g, "");
 
     const searchQuery = {
-      $or: [
-        { sender: req.user._id },
-        { recipient: req.user._id }
-      ],
-      text: { $regex: sanitizedQuery, $options: 'i' },
-      deletedBy: { $ne: req.user._id }
+      $or: [{ sender: req.user._id }, { recipient: req.user._id }],
+      text: { $regex: sanitizedQuery, $options: "i" },
+      deletedBy: { $ne: req.user._id },
     };
 
     if (conversationWith) {
       searchQuery.$or = [
         { sender: req.user._id, recipient: conversationWith },
-        { sender: conversationWith, recipient: req.user._id }
+        { sender: conversationWith, recipient: req.user._id },
       ];
     }
 
     const messages = await Messages.find(searchQuery)
-      .populate('sender recipient', 'username avatar fullname')
-      .sort('-createdAt')
+      .populate("sender recipient", "username avatar fullname")
+      .sort("-createdAt")
       .skip(skip)
       .limit(limit);
 
     const total = await Messages.countDocuments(searchQuery);
 
-    logger.info('Messages searched', {
-      query: sanitizedQuery,
-      userId: req.user._id,
-      results: messages.length
-    });
-
     res.json({
       messages,
       total,
       page,
-      totalPages: Math.ceil(total / limit)
+      totalPages: Math.ceil(total / limit),
     });
   }),
 
+  // 11. Thả Reaction (Tính năng của File 1)
   reactToMessage: asyncHandler(async (req, res) => {
     const { messageId } = req.params;
     const { emoji } = req.body;
 
-    if (!emoji) {
-      throw new ValidationError("Emoji is required.");
-    }
+    if (!emoji) throw new ValidationError("Emoji is required.");
 
     const message = await Messages.findById(messageId);
+    if (!message) throw new NotFoundError("Message");
 
-    if (!message) {
-      throw new NotFoundError("Message");
-    }
-
+    // Chỉ người trong cuộc mới được react
     if (
       message.sender.toString() !== req.user._id.toString() &&
       message.recipient.toString() !== req.user._id.toString()
@@ -401,57 +435,41 @@ const messageCtrl = {
     }
 
     const existingReactionIndex = message.reactions.findIndex(
-      r => r.user.toString() === req.user._id.toString()
+      (r) => r.user.toString() === req.user._id.toString()
     );
 
     if (existingReactionIndex !== -1) {
-      message.reactions[existingReactionIndex].emoji = emoji;
+      message.reactions[existingReactionIndex].emoji = emoji; // Update
     } else {
-      message.reactions.push({
-        user: req.user._id,
-        emoji
-      });
+      message.reactions.push({ user: req.user._id, emoji }); // Add new
     }
 
     await message.save();
 
-    logger.info('Message reaction added', {
-      messageId,
-      userId: req.user._id,
-      emoji
-    });
-
     res.json({
       msg: "Reaction added successfully.",
-      reactions: message.reactions
+      reactions: message.reactions,
     });
   }),
 
+  // 12. Xóa Reaction
   removeReaction: asyncHandler(async (req, res) => {
     const { messageId } = req.params;
-
     const message = await Messages.findById(messageId);
 
-    if (!message) {
-      throw new NotFoundError("Message");
-    }
+    if (!message) throw new NotFoundError("Message");
 
     message.reactions = message.reactions.filter(
-      r => r.user.toString() !== req.user._id.toString()
+      (r) => r.user.toString() !== req.user._id.toString()
     );
 
     await message.save();
 
-    logger.info('Message reaction removed', {
-      messageId,
-      userId: req.user._id
-    });
-
     res.json({
       msg: "Reaction removed successfully.",
-      reactions: message.reactions
+      reactions: message.reactions,
     });
-  })
+  }),
 };
 
 module.exports = messageCtrl;

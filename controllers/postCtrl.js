@@ -91,7 +91,9 @@ const postCtrl = {
       }
 
       if (images.length === 0) {
-        throw new ValidationError("Scheduled posts must have at least one image.");
+        throw new ValidationError(
+          "Scheduled posts must have at least one image."
+        );
       }
     }
 
@@ -150,18 +152,19 @@ const postCtrl = {
     const limit = parseInt(req.query.limit) || 9;
     const skip = (page - 1) * limit;
 
-    const currentUser = await Users.findById(req.user._id)
-      .select("blockedUsers blockedBy following");
+    const currentUser = await Users.findById(req.user._id).select(
+      "blockedUsers blockedBy following"
+    );
 
     const excludedUserIds = [
       ...currentUser.blockedUsers,
-      ...currentUser.blockedBy
+      ...currentUser.blockedBy,
     ];
 
     const posts = await Posts.find({
-      user: { 
+      user: {
         $in: [...currentUser.following, req.user._id],
-        $nin: excludedUserIds 
+        $nin: excludedUserIds,
       },
       status: "published",
       isDraft: false,
@@ -185,8 +188,8 @@ const postCtrl = {
         path: "originalPost",
         populate: {
           path: "user",
-          select: "username avatar fullname"
-        }
+          select: "username avatar fullname",
+        },
       })
       .lean();
 
@@ -480,15 +483,22 @@ const postCtrl = {
     }
 
     if (existingPost.isShared) {
-      throw new ValidationError("Cannot edit shared posts. You can only update the share caption.");
+      throw new ValidationError(
+        "Cannot edit shared posts. You can only update the share caption."
+      );
     }
 
     const existingImages = JSON.parse(req.body.existingImages || "[]");
     const finalImages = [...existingImages, ...images];
 
     if (existingPost.status === "published" && !existingPost.isDraft) {
-      if (finalImages.length === 0 && (!content || content.trim().length === 0)) {
-        throw new ValidationError("Post must have content or at least one image.");
+      if (
+        finalImages.length === 0 &&
+        (!content || content.trim().length === 0)
+      ) {
+        throw new ValidationError(
+          "Post must have content or at least one image."
+        );
       }
     }
 
@@ -526,7 +536,7 @@ const postCtrl = {
         _id: req.params.id,
         likes: { $ne: req.user._id },
         status: "published",
-        moderationStatus: { $ne: "removed" }
+        moderationStatus: { $ne: "removed" },
       },
       {
         $addToSet: { likes: req.user._id },
@@ -539,11 +549,11 @@ const postCtrl = {
       if (!existingPost) {
         throw new NotFoundError("Post");
       }
-      
+
       if (existingPost.moderationStatus === "removed") {
         throw new ValidationError("This post has been removed.");
       }
-      
+
       return res.status(400).json({
         msg: "You have already liked this post",
       });
@@ -606,23 +616,26 @@ const postCtrl = {
       .populate({
         path: "comments",
         populate: {
-          path: "user likes ",
+          path: "user likes",
           select: "-password",
         },
       })
       .populate({
         path: "originalPost",
+        select: "content images createdAt user",
         populate: {
           path: "user",
-          select: "username avatar fullname"
-        }
+          select: "username avatar fullname",
+        },
       });
 
     if (!post) {
       throw new NotFoundError("Post");
     }
 
-    const postOwner = await Users.findById(post.user._id).select("blockedUsers");
+    const postOwner = await Users.findById(post.user._id).select(
+      "blockedUsers"
+    );
     if (postOwner.blockedUsers.includes(req.user._id)) {
       throw new AuthorizationError("You cannot view this post.");
     }
@@ -668,10 +681,12 @@ const postCtrl = {
       }
 
       if (post.isShared && post.originalPost) {
-        const originalPost = await Posts.findById(post.originalPost).session(session);
+        const originalPost = await Posts.findById(post.originalPost).session(
+          session
+        );
         if (originalPost) {
           originalPost.shares = originalPost.shares.filter(
-            id => id.toString() !== req.params.id
+            (id) => id.toString() !== req.params.id
           );
           await originalPost.decrementShareCount();
           await originalPost.save({ session });
@@ -680,12 +695,12 @@ const postCtrl = {
 
       if (post.shareCount > 0 && post.shares.length > 0) {
         await Posts.deleteMany({
-          _id: { $in: post.shares }
+          _id: { $in: post.shares },
         }).session(session);
       }
 
-      await Comments.deleteMany({ 
-        _id: { $in: post.comments } 
+      await Comments.deleteMany({
+        _id: { $in: post.comments },
       }).session(session);
 
       await Reports.deleteMany({
@@ -735,9 +750,18 @@ const postCtrl = {
     if (!reason) throw new ValidationError("Report reason is required.");
 
     const validReasons = [
-      "spam", "harassment", "hate_speech", "violence", "nudity",
-      "false_information", "scam", "copyright", "self_harm",
-      "terrorism", "child_exploitation", "other",
+      "spam",
+      "harassment",
+      "hate_speech",
+      "violence",
+      "nudity",
+      "false_information",
+      "scam",
+      "copyright",
+      "self_harm",
+      "terrorism",
+      "child_exploitation",
+      "other",
     ];
 
     if (!validReasons.includes(reason))
@@ -787,7 +811,7 @@ const postCtrl = {
       priority: finalPriority,
       status: "pending",
     });
-
+    await newReport.save();
     await Posts.findByIdAndUpdate(req.params.id, {
       $push: { reports: newReport._id },
     });
@@ -1001,7 +1025,10 @@ const postCtrl = {
           url: `/post/${sharedPost._id}`,
           text: "shared your post",
           content: shareCaption || originalPost.content,
-          image: originalPost.images[0] || "",
+          image:
+            originalPost.images && originalPost.images.length > 0
+              ? originalPost.images[0].url
+              : "",
         });
 
         await notification.save({ session });
@@ -1200,7 +1227,7 @@ const postCtrl = {
 
   getMostSharedPosts: asyncHandler(async (req, res) => {
     const limit = parseInt(req.query.limit) || 10;
-    const timeRange = req.query.timeRange; 
+    const timeRange = req.query.timeRange;
 
     let timeRangeMs = null;
     if (timeRange === "day") {
