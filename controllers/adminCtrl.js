@@ -11,6 +11,7 @@ const {
   ValidationError,
   AuthorizationError,
 } = require("../utils/AppError");
+const notificationService = require("../services/notificationService");
 
 const adminCtrl = {
   getTotalUsers: asyncHandler(async (req, res) => {
@@ -319,6 +320,32 @@ const adminCtrl = {
     user.blockedAt = new Date();
     await user.save();
 
+    await notificationService.notifyAccountBlocked(
+      req.params.id,
+      req.user._id,
+      reason,
+      "admin_block"
+    );
+
+    const io = notificationService.getIO();
+    if (io) {
+      io.to(req.params.id).emit("accountBlocked", {
+        reason,
+        actionTaken: "account_blocked",
+        blockedAt: user.blockedAt,
+        message: "Your account has been blocked by admin.",
+      });
+
+      const sockets = await io.in(req.params.id).fetchSockets();
+      for (const socket of sockets) {
+        socket.emit("forceLogout", {
+          reason: "account_blocked",
+          message: "Your account has been blocked.",
+        });
+        socket.disconnect(true);
+      }
+    }
+
     logger.audit("User account blocked", req.user._id, {
       blockedUserId: req.params.id,
       reason,
@@ -346,6 +373,21 @@ const adminCtrl = {
     user.blockedByAdmin = undefined;
     user.blockedAt = undefined;
     await user.save();
+
+
+    await notificationService.notifyAccountUnblocked(
+      req.params.id,
+      req.user._id,
+      "Your account has been unblocked."
+    );
+
+    const io = notificationService.getIO();
+    if (io) {
+      io.to(req.params.id).emit("accountUnblocked", {
+        message: "Your account has been unblocked.",
+        unblockedAt: new Date(),
+      });
+    }
 
     logger.audit("User account unblocked", req.user._id, {
       unblockedUserId: req.params.id,
@@ -653,6 +695,16 @@ const adminCtrl = {
             await Posts.findByIdAndDelete(report.targetId, { session });
             await Comments.deleteMany({ postId: report.targetId }, { session });
           }
+
+          if (post.user.toString() !== req.user._id.toString()) {
+            await notificationService.notifyContentRemoved(
+              "post",
+              report.targetId,
+              post.user,
+              report.reason,
+              adminNote
+            );
+          }
         }
       }
 
@@ -664,6 +716,16 @@ const adminCtrl = {
 
           if (actionTaken === "content_removed") {
             await Comments.findByIdAndDelete(report.targetId, { session });
+          }
+
+          if (comment.user.toString() !== req.user._id.toString()) {
+            await notificationService.notifyContentRemoved(
+              "comment",
+              report.targetId,
+              comment.user,
+              report.reason,
+              adminNote
+            );
           }
         }
       }
@@ -687,7 +749,6 @@ const adminCtrl = {
           user.tokenVersion = (user.tokenVersion || 0) + 1;
           await user.save({ session });
 
-          const notificationService = require("../services/notificationService");
           const io = notificationService.getIO();
           
           if (io) {
@@ -719,21 +780,17 @@ const adminCtrl = {
           });
           await newNotify.save({ session });
         } else if (actionTaken === "warning") {
-          const newNotify = new Notifies({
-            recipients: [user._id],
-            user: req.user._id,
-            type: "warning",
-            text: "Warning: Your content has been reported",
-            content: adminNote || "Please review our community guidelines.",
-            url: "/community-guidelines",
-            isRead: false,
-          });
-          await newNotify.save({ session });
+          await notificationService.notifyWarning(
+            user._id,
+            req.user._id,
+            adminNote || report.reason,
+            report._id
+          );
         }
       }
 
       if (report.reportType !== "message") {
-        await Reports.updateMany(
+        const bulkResolved = await Reports.updateMany(
           {
             targetId: report.targetId,
             reportType: report.reportType,
@@ -751,7 +808,33 @@ const adminCtrl = {
           },
           { session }
         );
+
+        if (bulkResolved.modifiedCount > 0) {
+          const resolvedReports = await Reports.find({
+            targetId: report.targetId,
+            reportType: report.reportType,
+            status: "resolved",
+            _id: { $ne: reportId },
+          }).select("reportedBy");
+
+          const uniqueReporters = [...new Set(resolvedReports.map(r => r.reportedBy.toString()))];
+          
+          for (const reporterId of uniqueReporters) {
+            await notificationService.notifyReportResolved(
+              report._id,
+              reporterId,
+              req.user._id,
+              "Your report has been resolved along with related reports."
+            );
+          }
+        }
       }
+
+      await notificationService.notifyReportAccepted(
+        report,
+        actionTaken,
+        adminNote
+      );
 
       await session.commitTransaction();
       res.json({
@@ -792,6 +875,11 @@ const adminCtrl = {
     }
 
     await report.decline(req.user._id, adminNote);
+
+    await notificationService.notifyReportDeclined(
+      report,
+      adminNote
+    );
 
     logger.audit("Report declined", req.user._id, {
       reportId,
@@ -1043,7 +1131,6 @@ const adminCtrl = {
       }
     );
 
-    const notificationService = require("../services/notificationService");
     const io = notificationService.getIO();
     
     if (io) {
@@ -1199,16 +1286,20 @@ const adminCtrl = {
     }
 
     let actionMessage = "";
+    let blockType = "";
+    let expiresAt = null;
 
     switch (action) {
       case "block":
         await user.blockUser(req.user._id, reason, "account_suspended", null);
         actionMessage = "User blocked successfully.";
+        blockType = "admin_block";
         break;
 
       case "ban":
         await user.blockUser(req.user._id, reason, "account_banned", null);
         actionMessage = "User permanently banned.";
+        blockType = "permanent_ban";
         break;
 
       case "suspend":
@@ -1216,17 +1307,24 @@ const adminCtrl = {
           throw new ValidationError("Suspension duration is required (in hours).");
         }
         const durationMs = duration * 60 * 60 * 1000;
+        expiresAt = new Date(Date.now() + durationMs);
         await user.blockUser(req.user._id, reason, "account_suspended", null, durationMs);
         actionMessage = `User suspended for ${duration} hours.`;
+        blockType = "temporary_suspension";
         break;
 
       case "unblock":
         await user.unblockUser(req.user._id);
         actionMessage = "User unblocked successfully.";
+        
+        await notificationService.notifyAccountUnblocked(
+          userId,
+          req.user._id,
+          reason || "Your account has been unblocked."
+        );
         break;
     }
 
-    const notificationService = require("../services/notificationService");
     const io = notificationService.getIO();
     
     if (io && action !== "unblock") {
@@ -1240,6 +1338,16 @@ const adminCtrl = {
       const sockets = await io.in(userId).fetchSockets();
       for (const socket of sockets) {
         socket.disconnect(true);
+      }
+
+      if (action !== "unblock") {
+        await notificationService.notifyAccountBlocked(
+          userId,
+          req.user._id,
+          reason,
+          blockType,
+          expiresAt
+        );
       }
     }
 

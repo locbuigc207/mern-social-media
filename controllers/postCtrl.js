@@ -817,6 +817,11 @@ const postCtrl = {
       status: "pending",
     });
     await newReport.save();
+
+    if (finalPriority === "critical" || finalPriority === "high") {
+      await notificationService.notifyAdminsNewReport(newReport, req.user);
+    }
+
     await Posts.findByIdAndUpdate(req.params.id, {
       $push: { reports: newReport._id },
     });

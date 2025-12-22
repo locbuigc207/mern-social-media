@@ -27,6 +27,15 @@ const notifySchema = new Schema(
         "group_mention",
         "friend_request",
         "friend_accept",
+        "report_created",      // Admin nhận thông báo report mới
+        "report_accepted",     // Reporter nhận report được chấp nhận
+        "report_declined",     // Reporter nhận report bị từ chối
+        "report_processed",    // Reporter nhận report đã xử lý (general)
+        "content_removed",     // Owner nhận content bị xóa
+        "account_blocked",     // User nhận account bị block
+        "account_unblocked",   // User nhận account được unblock
+        "warning",            // User nhận cảnh báo
+        "report_resolved",     // Reporter nhận report đã resolve
       ],
       default: "like",
       index: true,
@@ -41,6 +50,17 @@ const notifySchema = new Schema(
     image: String,
     
     isRead: { type: Boolean, default: false, index: true },
+    
+    metadata: {
+      reportId: { type: mongoose.Types.ObjectId, ref: "report" },
+      reportType: String,
+      reportReason: String,
+      reportStatus: String,
+      actionTaken: String,
+      blockType: String,
+      expiresAt: Date,
+      priority: String,
+    },
   },
   {
     timestamps: true,
@@ -50,6 +70,7 @@ const notifySchema = new Schema(
 notifySchema.index({ recipients: 1, createdAt: -1 });
 notifySchema.index({ recipients: 1, isRead: 1 });
 notifySchema.index({ user: 1, type: 1 });
+notifySchema.index({ 'metadata.reportId': 1 });
 
 notifySchema.virtual("postData", {
   ref: "post",

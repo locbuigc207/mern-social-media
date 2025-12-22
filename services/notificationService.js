@@ -28,13 +28,11 @@ class NotificationService {
         url,
         content,
         image,
+        metadata,
       } = data;
 
       if (!recipients || recipients.length === 0) {
         throw new Error("Recipients are required");
-      }
-      if (!sender) {
-        throw new Error("Sender is required");
       }
       if (!type) {
         throw new Error("Notification type is required");
@@ -65,6 +63,7 @@ class NotificationService {
         content: content || "",
         image: image || "",
         isRead: false,
+        metadata: metadata || {},
       });
 
       await newNotify.save();
@@ -187,7 +186,6 @@ class NotificationService {
     });
   }
 
-
   async notifyFollow(targetUser, follower) {
     return this.create({
       recipients: [targetUser._id],
@@ -198,10 +196,6 @@ class NotificationService {
     });
   }
 
-  /**
-   * Mention trong Post/Comment
-   * @param {Array} mentionedUserIds - Danh sách user được tag
-   */
   async notifyMention(mentionedUserIds, mentioner, post, comment = null) {
     const validRecipients = mentionedUserIds.filter(
       (id) => id.toString() !== mentioner._id.toString()
@@ -306,6 +300,256 @@ class NotificationService {
     });
   }
 
+  async notifyAdminsNewReport(report, reporter) {
+    try {
+      const Users = require("../models/userModel");
+      const admins = await Users.find({ role: "admin" }).select("_id");
+      
+      if (admins.length === 0) {
+        logger.warn("No admins found to notify about new report");
+        return;
+      }
+
+      const priorityEmoji = {
+        critical: "🚨",
+        high: "⚠️",
+        medium: "📢",
+        low: "ℹ️"
+      };
+
+      const typeText = {
+        post: "bài viết",
+        comment: "bình luận",
+        user: "người dùng",
+        message: "tin nhắn"
+      };
+
+      const reasonText = {
+        spam: "Spam",
+        harassment: "Quấy rối",
+        hate_speech: "Ngôn từ căm thù",
+        violence: "Bạo lực",
+        nudity: "Nội dung nhạy cảm",
+        false_information: "Thông tin sai lệch",
+        scam: "Lừa đảo",
+        copyright: "Vi phạm bản quyền",
+        self_harm: "Tự gây thương tích",
+        terrorism: "Khủng bố",
+        child_exploitation: "Khai thác trẻ em",
+        bullying: "Bắt nạt",
+        threats: "Đe dọa",
+        other: "Khác"
+      };
+
+      return this.create({
+        recipients: admins.map(a => a._id),
+        sender: reporter._id,
+        type: "report_created",
+        text: `${priorityEmoji[report.priority]} Báo cáo ${typeText[report.reportType]} mới (${report.priority})`,
+        content: `Lý do: ${reasonText[report.reason]}\n${report.description?.substring(0, 100) || ""}`,
+        url: `/admin/reports/${report._id}`,
+        metadata: {
+          reportId: report._id,
+          reportType: report.reportType,
+          reportReason: report.reason,
+          reportStatus: report.status,
+          priority: report.priority,
+        },
+      });
+    } catch (error) {
+      logger.error("Failed to notify admins about new report", error);
+    }
+  }
+
+  async notifyReportAccepted(report, actionTaken, adminNote) {
+    try {
+      const actionText = {
+        none: "đã được xem xét (không có hành động)",
+        warning: "đã được xem xét (đưa ra cảnh báo)",
+        content_removed: "đã được chấp nhận (nội dung đã bị xóa)",
+        account_suspended: "đã được chấp nhận (tài khoản đã bị tạm khóa)",
+        account_banned: "đã được chấp nhận (tài khoản đã bị cấm vĩnh viễn)"
+      };
+
+      return this.create({
+        recipients: [report.reportedBy],
+        sender: report.reviewedBy,
+        type: "report_accepted",
+        text: `Báo cáo của bạn ${actionText[actionTaken]}`,
+        content: adminNote || "Cảm ơn bạn đã giúp chúng tôi giữ cho cộng đồng an toàn.",
+        url: `/notifications`,
+        metadata: {
+          reportId: report._id,
+          reportType: report.reportType,
+          reportReason: report.reason,
+          reportStatus: "accepted",
+          actionTaken: actionTaken,
+        },
+      });
+    } catch (error) {
+      logger.error("Failed to notify reporter about accepted report", error);
+    }
+  }
+
+  async notifyReportDeclined(report, adminNote) {
+    try {
+      return this.create({
+        recipients: [report.reportedBy],
+        sender: report.reviewedBy,
+        type: "report_declined",
+        text: "Báo cáo của bạn đã được xem xét",
+        content: adminNote || "Sau khi xem xét, chúng tôi nhận thấy nội dung này không vi phạm nguyên tắc cộng đồng.",
+        url: `/notifications`,
+        metadata: {
+          reportId: report._id,
+          reportType: report.reportType,
+          reportReason: report.reason,
+          reportStatus: "declined",
+        },
+      });
+    } catch (error) {
+      logger.error("Failed to notify reporter about declined report", error);
+    }
+  }
+
+  async notifyContentRemoved(contentType, contentId, ownerId, reason, adminNote) {
+    try {
+      const contentText = {
+        post: "bài viết",
+        comment: "bình luận",
+        story: "story",
+        message: "tin nhắn"
+      };
+
+      const reasonText = {
+        spam: "Spam",
+        harassment: "Quấy rối",
+        hate_speech: "Ngôn từ căm thù",
+        violence: "Bạo lực",
+        nudity: "Nội dung nhạy cảm",
+        false_information: "Thông tin sai lệch",
+        scam: "Lừa đảo",
+        copyright: "Vi phạm bản quyền",
+        self_harm: "Tự gây thương tích",
+        terrorism: "Khủng bố",
+        child_exploitation: "Khai thác trẻ em",
+        bullying: "Bắt nạt",
+        threats: "Đe dọa",
+        other: "Vi phạm nguyên tắc cộng đồng"
+      };
+
+      return this.create({
+        recipients: [ownerId],
+        sender: null,
+        type: "content_removed",
+        text: `${contentText[contentType]} của bạn đã bị xóa`,
+        content: `Lý do: ${reasonText[reason] || reason}\n\n${adminNote || "Vui lòng xem lại nguyên tắc cộng đồng của chúng tôi."}`,
+        url: "/community-guidelines",
+        metadata: {
+          contentType: contentType,
+          contentId: contentId,
+          reason: reason,
+        },
+      });
+    } catch (error) {
+      logger.error("Failed to notify content owner about removal", error);
+    }
+  }
+
+  async notifyAccountBlocked(userId, blockedBy, reason, blockType, expiresAt = null) {
+    try {
+      let text = "Tài khoản của bạn đã bị ";
+      let content = reason;
+
+      if (blockType === "permanent_ban") {
+        text += "cấm vĩnh viễn";
+        content += "\n\nBạn có thể khiếu nại quyết định này bằng cách liên hệ với bộ phận hỗ trợ.";
+      } else if (blockType === "temporary_suspension") {
+        const hoursRemaining = Math.ceil((expiresAt - new Date()) / (1000 * 60 * 60));
+        const daysRemaining = Math.ceil(hoursRemaining / 24);
+        
+        if (hoursRemaining > 48) {
+          text += `tạm khóa trong ${daysRemaining} ngày`;
+        } else {
+          text += `tạm khóa trong ${hoursRemaining} giờ`;
+        }
+        
+        content += `\n\nTài khoản của bạn sẽ tự động được mở khóa vào ${expiresAt.toLocaleString('vi-VN')}.`;
+      } else {
+        text += "khóa";
+        content += "\n\nVui lòng liên hệ với bộ phận hỗ trợ để biết thêm thông tin.";
+      }
+
+      return this.create({
+        recipients: [userId],
+        sender: blockedBy,
+        type: "account_blocked",
+        text,
+        content,
+        url: "/support",
+        metadata: {
+          blockType: blockType,
+          reason: reason,
+          expiresAt: expiresAt,
+        },
+      });
+    } catch (error) {
+      logger.error("Failed to notify user about account block", error);
+    }
+  }
+
+  async notifyAccountUnblocked(userId, unblockedBy, note = null) {
+    try {
+      return this.create({
+        recipients: [userId],
+        sender: unblockedBy,
+        type: "account_unblocked",
+        text: "Tài khoản của bạn đã được mở khóa",
+        content: note || "Quyền truy cập tài khoản của bạn đã được khôi phục. Vui lòng tuân thủ nguyên tắc cộng đồng của chúng tôi.",
+        url: "/",
+      });
+    } catch (error) {
+      logger.error("Failed to notify user about account unblock", error);
+    }
+  }
+
+  async notifyWarning(userId, warnedBy, reason, reportId = null) {
+    try {
+      return this.create({
+        recipients: [userId],
+        sender: warnedBy,
+        type: "warning",
+        text: " Bạn đã nhận được một cảnh báo",
+        content: `Lý do: ${reason}\n\nVui lòng xem lại nguyên tắc cộng đồng của chúng tôi để tránh các hành động tiếp theo.`,
+        url: reportId ? `/notifications` : "/community-guidelines",
+        metadata: {
+          reportId: reportId,
+          reason: reason,
+        },
+      });
+    } catch (error) {
+      logger.error("Failed to notify user about warning", error);
+    }
+  }
+
+  async notifyReportResolved(reportId, reportedBy, reviewedBy, note) {
+    try {
+      return this.create({
+        recipients: [reportedBy],
+        sender: reviewedBy,
+        type: "report_resolved",
+        text: "Báo cáo của bạn đã được xử lý",
+        content: note || "Báo cáo của bạn đã được giải quyết cùng với các báo cáo liên quan khác.",
+        url: `/notifications`,
+        metadata: {
+          reportId: reportId,
+          reportStatus: "resolved",
+        },
+      });
+    } catch (error) {
+      logger.error("Failed to notify about resolved report", error);
+    }
+  }
 
   _generateUrl(type, postId, commentId) {
     if (postId) return `/post/${postId}`;
@@ -328,6 +572,15 @@ class NotificationService {
       group_mention: "đã nhắc đến bạn trong nhóm",
       friend_request: "đã gửi lời mời kết bạn",
       friend_accept: "đã chấp nhận lời mời kết bạn",
+      report_created: "Báo cáo mới",
+      report_accepted: "Báo cáo của bạn đã được chấp nhận",
+      report_declined: "Báo cáo của bạn đã được xem xét",
+      report_processed: "Báo cáo của bạn đã được xử lý",
+      content_removed: "Nội dung của bạn đã bị xóa",
+      account_blocked: "Tài khoản của bạn đã bị khóa",
+      account_unblocked: "Tài khoản của bạn đã được mở khóa",
+      warning: "Bạn đã nhận được cảnh báo",
+      report_resolved: "Báo cáo của bạn đã được giải quyết",
     };
     return textMap[type] || "có hoạt động mới";
   }

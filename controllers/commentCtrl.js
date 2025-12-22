@@ -64,7 +64,7 @@ const commentCtrl = {
     const mentions = content.match(mentionRegex);
     if (mentions) {
       const Users = require("../models/userModel");
-      const usernames = mentions.map((m) => m.slice(1)); 
+      const usernames = mentions.map((m) => m.slice(1));
       const mentionedUsers = await Users.find({
         username: { $in: usernames },
       }).select("_id");
@@ -247,6 +247,10 @@ const commentCtrl = {
     });
 
     await newReport.save();
+
+    if (finalPriority === REPORT_PRIORITY.CRITICAL || finalPriority === REPORT_PRIORITY.HIGH) {
+      await notificationService.notifyAdminsNewReport(newReport, req.user);
+    }
 
     comment.reports.push(newReport._id);
     await comment.incrementReportCount();
