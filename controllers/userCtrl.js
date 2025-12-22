@@ -392,6 +392,7 @@ const userCtrl = {
         { new: true, session }
       );
 
+      // Notify followed user
       await notificationService.notifyFollow(targetUser, req.user);
 
       await session.commitTransaction();
@@ -582,6 +583,15 @@ const userCtrl = {
 
         autoBlocked = true;
 
+        // Notify user about auto-block
+        await notificationService.notifyAccountBlocked(
+          updatedUser._id,
+          null,
+          autoBlockReason,
+          "temporary_suspension",
+          updatedUser.suspendedUntil
+        );
+
         const io = notificationService.getIO();
         if (io) {
           io.to(updatedUser._id.toString()).emit("accountBlocked", {
@@ -601,35 +611,10 @@ const userCtrl = {
             socket.disconnect(true);
           }
         }
-
-        const newNotify = new Notifies({
-          recipients: [updatedUser._id],
-          user: req.user._id,
-          type: "warning",
-          text: "Your account has been temporarily suspended",
-          content: autoBlockReason,
-          url: "/support",
-          isRead: false,
-        });
-        await newNotify.save({ session });
-
-        const admins = await Users.find({ role: "admin" }).select("_id");
-        if (admins.length > 0) {
-          const adminNotify = new Notifies({
-            recipients: admins.map((a) => a._id),
-            user: updatedUser._id,
-            type: "warning",
-            text: "User auto-blocked due to multiple reports",
-            content: `User ${updatedUser.username} has been automatically suspended. Pending reports: ${pendingReportsCount}`,
-            url: `/admin/reports/users/${updatedUser._id}`,
-            isRead: false,
-          });
-          await adminNotify.save({ session });
-        }
-
-        const hours = Math.ceil(suspensionDuration / (1000 * 60 * 60));
-        actionMessage = `Report submitted. The user has been temporarily suspended for ${hours} hours due to multiple reports.`;
       }
+
+      // Notify admins about the report
+      await notificationService.notifyAdminsNewReport(newReport, req.user);
 
       await session.commitTransaction();
 

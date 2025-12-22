@@ -274,7 +274,7 @@ const commentCtrl = {
   }),
 
   hideComment: asyncHandler(async (req, res) => {
-    const comment = await Comments.findById(req.params.id);
+    const comment = await Comments.findById(req.params.id).populate("user", "_id");
 
     if (!comment) {
       throw new NotFoundError("Comment");
@@ -291,6 +291,14 @@ const commentCtrl = {
     }
     comment.isHidden = true;
     await comment.save();
+
+    if (comment.user._id.toString() !== req.user._id.toString()) {
+      await notificationService.notifyCommentHidden(
+        comment,
+        req.user._id,
+        "Your comment has been hidden by another user"
+      );
+    }
 
     logger.info("Comment hidden", {
       commentId: req.params.id,

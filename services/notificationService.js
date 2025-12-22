@@ -8,14 +8,10 @@ class NotificationService {
 
   initialize(socketIO) {
     this.io = socketIO;
-    logger.info("✅ NotificationService initialized with Socket.IO");
+    logger.info(" NotificationService initialized with Socket.IO");
   }
 
-  /**
-   * Tạo và emit notification
-   * @param {Object} data - Notification data
-   * @returns {Promise<Object>} Created notification
-   */
+
   async create(data) {
     try {
       const {
@@ -93,6 +89,7 @@ class NotificationService {
     }
   }
 
+  
   async notifyLikePost(post, liker) {
     if (post.user.toString() === liker._id.toString()) return;
 
@@ -186,6 +183,7 @@ class NotificationService {
     });
   }
 
+  
   async notifyFollow(targetUser, follower) {
     return this.create({
       recipients: [targetUser._id],
@@ -235,6 +233,7 @@ class NotificationService {
     });
   }
 
+  
   async notifyStoryView(story, viewer) {
     if (story.user.toString() === viewer._id.toString()) return;
 
@@ -262,6 +261,7 @@ class NotificationService {
     });
   }
 
+  
   async notifyGroupMention(mentionedUserIds, mentioner, group, message) {
     const validRecipients = mentionedUserIds.filter(
       (id) => id.toString() !== mentioner._id.toString()
@@ -280,6 +280,46 @@ class NotificationService {
     });
   }
 
+  async notifyGroupInvite(invitedUserIds, inviter, group) {
+    return this.create({
+      recipients: invitedUserIds,
+      sender: inviter._id,
+      type: "group_invite",
+      text: `đã mời bạn tham gia nhóm "${group.name}"`,
+      content: group.description?.substring(0, 100) || "",
+      url: `/group/${group._id}`,
+      image: group.avatar || "",
+    });
+  }
+
+  async notifyGroupRemoved(removedUserId, removedBy, group) {
+    return this.create({
+      recipients: [removedUserId],
+      sender: removedBy,
+      type: "group_removed",
+      text: `đã xóa bạn khỏi nhóm "${group.name}"`,
+      url: `/groups`,
+      image: group.avatar || "",
+    });
+  }
+
+  async notifyGroupRoleChanged(userId, changedBy, group, newRole) {
+    const roleText = {
+      admin: "quản trị viên",
+      member: "thành viên"
+    };
+
+    return this.create({
+      recipients: [userId],
+      sender: changedBy,
+      type: "group_role_changed",
+      text: `đã thay đổi vai trò của bạn thành ${roleText[newRole]} trong nhóm "${group.name}"`,
+      url: `/group/${group._id}`,
+      image: group.avatar || "",
+    });
+  }
+
+  
   async notifyFriendRequest(targetUser, requester) {
     return this.create({
       recipients: [targetUser._id],
@@ -300,6 +340,7 @@ class NotificationService {
     });
   }
 
+  
   async notifyAdminsNewReport(report, reporter) {
     try {
       const Users = require("../models/userModel");
@@ -456,6 +497,27 @@ class NotificationService {
     }
   }
 
+  async notifySpamPostDeleted(post, adminId, reason = "Spam") {
+    try {
+      return this.create({
+        recipients: [post.user._id || post.user],
+        sender: adminId,
+        type: "content_removed",
+        text: "Bài viết spam của bạn đã bị xóa",
+        content: `Lý do: ${reason}\n\nBài viết của bạn đã nhận được nhiều báo cáo và bị xác định là spam. Vui lòng tuân thủ nguyên tắc cộng đồng.`,
+        url: "/community-guidelines",
+        metadata: {
+          contentType: "post",
+          contentId: post._id,
+          reason: reason,
+          reportCount: post.reportCount || 0,
+        },
+      });
+    } catch (error) {
+      logger.error("Failed to notify user about spam post deletion", error);
+    }
+  }
+
   async notifyAccountBlocked(userId, blockedBy, reason, blockType, expiresAt = null) {
     try {
       let text = "Tài khoản của bạn đã bị ";
@@ -551,6 +613,110 @@ class NotificationService {
     }
   }
 
+  async notifyCommentHidden(comment, hiddenBy, reason) {
+    try {
+      if (comment.user.toString() === hiddenBy.toString()) return;
+
+      return this.create({
+        recipients: [comment.user],
+        sender: hiddenBy,
+        type: "content_hidden",
+        text: "Bình luận của bạn đã bị ẩn",
+        content: `Lý do: ${reason || "Vi phạm nguyên tắc cộng đồng"}`,
+        url: `/notifications`,
+        metadata: {
+          contentType: "comment",
+          contentId: comment._id,
+          reason: reason,
+        },
+      });
+    } catch (error) {
+      logger.error("Failed to notify about hidden comment", error);
+    }
+  }
+
+  async notifyPostHidden(post, hiddenBy, reason) {
+    try {
+      if (post.user.toString() === hiddenBy.toString()) return;
+
+      return this.create({
+        recipients: [post.user],
+        sender: hiddenBy,
+        type: "content_hidden",
+        text: "Bài viết của bạn đã bị ẩn",
+        content: `Lý do: ${reason || "Vi phạm nguyên tắc cộng đồng"}`,
+        url: `/notifications`,
+        metadata: {
+          contentType: "post",
+          contentId: post._id,
+          reason: reason,
+        },
+      });
+    } catch (error) {
+      logger.error("Failed to notify about hidden post", error);
+    }
+  }
+
+
+  async notifySystemMaintenance(userIds, startTime, endTime, message) {
+    try {
+      return this.create({
+        recipients: userIds,
+        sender: null,
+        type: "system_maintenance",
+        text: " Bảo trì hệ thống",
+        content: `${message}\n\nThời gian: ${startTime.toLocaleString('vi-VN')} - ${endTime.toLocaleString('vi-VN')}`,
+        url: "/",
+      });
+    } catch (error) {
+      logger.error("Failed to send maintenance notification", error);
+    }
+  }
+
+  async notifyPolicyUpdate(userIds, policyType, effectiveDate) {
+    try {
+      const policyText = {
+        terms: "Điều khoản sử dụng",
+        privacy: "Chính sách bảo mật",
+        community: "Nguyên tắc cộng đồng"
+      };
+
+      return this.create({
+        recipients: userIds,
+        sender: null,
+        type: "policy_update",
+        text: ` Cập nhật ${policyText[policyType]}`,
+        content: `Chúng tôi đã cập nhật ${policyText[policyType]}. Vui lòng xem lại các thay đổi.\n\nCó hiệu lực từ: ${effectiveDate.toLocaleString('vi-VN')}`,
+        url: `/${policyType}`,
+      });
+    } catch (error) {
+      logger.error("Failed to send policy update notification", error);
+    }
+  }
+
+  async notifySecurityAlert(userId, alertType, details) {
+    try {
+      const alertText = {
+        new_login: " Đăng nhập mới",
+        password_changed: " Mật khẩu đã được thay đổi",
+        suspicious_activity: " Hoạt động đáng ngờ",
+        new_device: " Thiết bị mới"
+      };
+
+      return this.create({
+        recipients: [userId],
+        sender: null,
+        type: "security_alert",
+        text: alertText[alertType],
+        content: details,
+        url: "/settings/security",
+      });
+    } catch (error) {
+      logger.error("Failed to send security alert", error);
+    }
+  }
+
+
   _generateUrl(type, postId, commentId) {
     if (postId) return `/post/${postId}`;
     if (commentId) return `/comment/${commentId}`;
@@ -570,17 +736,23 @@ class NotificationService {
       story_view: "đã xem story của bạn",
       story_reply: "đã trả lời story của bạn",
       group_mention: "đã nhắc đến bạn trong nhóm",
+      group_invite: "đã mời bạn tham gia nhóm",
+      group_removed: "đã xóa bạn khỏi nhóm",
+      group_role_changed: "đã thay đổi vai trò của bạn trong nhóm",
       friend_request: "đã gửi lời mời kết bạn",
       friend_accept: "đã chấp nhận lời mời kết bạn",
       report_created: "Báo cáo mới",
       report_accepted: "Báo cáo của bạn đã được chấp nhận",
       report_declined: "Báo cáo của bạn đã được xem xét",
-      report_processed: "Báo cáo của bạn đã được xử lý",
+      report_resolved: "Báo cáo của bạn đã được giải quyết",
       content_removed: "Nội dung của bạn đã bị xóa",
+      content_hidden: "Nội dung của bạn đã bị ẩn",
       account_blocked: "Tài khoản của bạn đã bị khóa",
       account_unblocked: "Tài khoản của bạn đã được mở khóa",
       warning: "Bạn đã nhận được cảnh báo",
-      report_resolved: "Báo cáo của bạn đã được giải quyết",
+      system_maintenance: "Bảo trì hệ thống",
+      policy_update: "Cập nhật chính sách",
+      security_alert: "Cảnh báo bảo mật",
     };
     return textMap[type] || "có hoạt động mới";
   }

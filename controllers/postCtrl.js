@@ -841,10 +841,10 @@ const postCtrl = {
 
   hidePost: asyncHandler(async (req, res) => {
     const { reason } = req.body;
-    const post = await Posts.findById(req.params.id);
+    const post = await Posts.findById(req.params.id).populate("user", "_id");
 
     if (!post) throw new NotFoundError("Post not found.");
-    if (post.user.toString() === req.user._id.toString()) {
+    if (post.user._id.toString() === req.user._id.toString()) {
       throw new ValidationError("You cannot hide your own post.");
     }
     if (post.hiddenBy.includes(req.user._id)) {
@@ -852,6 +852,12 @@ const postCtrl = {
     }
 
     await post.hidePost(req.user._id, reason || "User preference");
+
+    await notificationService.notifyPostHidden(
+      post,
+      req.user._id,
+      reason || "Your post has been hidden by another user"
+    );
 
     res.json({
       msg: "Post hidden successfully.",

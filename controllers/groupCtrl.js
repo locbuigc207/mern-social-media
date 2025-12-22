@@ -68,9 +68,19 @@ const groupCtrl = {
       .populate("admin", "username avatar fullname")
       .populate("members.user", "username avatar fullname");
 
+    const invitedMemberIds = members.filter(id => id !== req.user._id.toString());
+    if (invitedMemberIds.length > 0) {
+      await notificationService.notifyGroupInvite(
+        invitedMemberIds,
+        req.user._id,
+        populatedGroup
+      );
+    }
+
     res.json({
       msg: "Group created successfully!",
       group: populatedGroup,
+      notificationsSent: invitedMemberIds.length,
     });
   }),
 
@@ -184,6 +194,7 @@ const groupCtrl = {
       res.json({
         msg: "Message sent successfully!",
         message: populatedMessage,
+        mentionNotificationsSent: mentions?.length || 0,
       });
     } catch (err) {
       await session.abortTransaction();
@@ -287,9 +298,18 @@ const groupCtrl = {
       .populate("admin", "username avatar fullname")
       .populate("members.user", "username avatar fullname");
 
+    if (newMembers.length > 0) {
+      await notificationService.notifyGroupInvite(
+        newMembers,
+        req.user._id,
+        populatedGroup
+      );
+    }
+
     res.json({
       msg: `${newMembers.length} member(s) added successfully!`,
       group: populatedGroup,
+      notificationsSent: newMembers.length,
     });
   }),
 
@@ -324,7 +344,70 @@ const groupCtrl = {
 
     await group.save();
 
-    res.json({ msg: "Member removed successfully." });
+    await notificationService.notifyGroupRemoved(
+      memberId,
+      req.user._id,
+      group
+    );
+
+    res.json({ 
+      msg: "Member removed successfully.",
+      notificationSent: true,
+    });
+  }),
+
+  updateMemberRole: asyncHandler(async (req, res) => {
+    const { groupId, memberId } = req.params;
+    const { role } = req.body;
+
+    if (!["admin", "member"].includes(role)) {
+      throw new ValidationError("Invalid role. Must be 'admin' or 'member'.");
+    }
+
+    const group = await Groups.findById(groupId);
+
+    if (!group) {
+      throw new NotFoundError("Group");
+    }
+
+    const isAdmin = group.admin.some(
+      (a) => a.toString() === req.user._id.toString()
+    );
+
+    if (!isAdmin) {
+      throw new AuthorizationError("Only admins can change member roles.");
+    }
+
+    const member = group.members.find(
+      (m) => m.user.toString() === memberId
+    );
+
+    if (!member) {
+      throw new NotFoundError("Member not found in group");
+    }
+
+    member.role = role;
+
+    if (role === "admin" && !group.admin.includes(memberId)) {
+      group.admin.push(memberId);
+    } else if (role === "member") {
+      group.admin = group.admin.filter(id => id.toString() !== memberId);
+    }
+
+    await group.save();
+
+    await notificationService.notifyGroupRoleChanged(
+      memberId,
+      req.user._id,
+      group,
+      role
+    );
+
+    res.json({
+      msg: `Member role updated to ${role} successfully.`,
+      notificationSent: true,
+      group,
+    });
   }),
 
   leaveGroup: asyncHandler(async (req, res) => {

@@ -200,7 +200,7 @@ const adminCtrl = {
   deleteSpamPost: asyncHandler(async (req, res) => {
     const post = await Posts.findOneAndDelete({
       _id: req.params.id,
-    });
+    }).populate("user", "username email fullname");
 
     if (!post) {
       throw new NotFoundError("Post");
@@ -208,12 +208,31 @@ const adminCtrl = {
 
     await Comments.deleteMany({ _id: { $in: post.comments } });
 
+    await notificationService.notifySpamPostDeleted(
+      post,
+      req.user._id,
+      `Bài viết của bạn đã nhận được ${post.reportCount || 0} báo cáo vi phạm`
+    );
+
+    const io = notificationService.getIO();
+    if (io) {
+      io.to(post.user._id.toString()).emit("postDeleted", {
+        postId: post._id,
+        reason: "spam",
+        deletedAt: new Date(),
+      });
+    }
+
     logger.audit("Spam post deleted", req.user._id, {
       postId: req.params.id,
-      postUserId: post.user,
+      postUserId: post.user._id,
+      reportCount: post.reportCount,
     });
 
-    res.json({ msg: "Post deleted successfully." });
+    res.json({
+      msg: "Post deleted successfully.",
+      notificationSent: true,
+    });
   }),
 
   getUsers: asyncHandler(async (req, res) => {
@@ -353,6 +372,7 @@ const adminCtrl = {
 
     res.json({
       msg: "User account blocked successfully.",
+      notificationSent: true,
       user: {
         _id: user._id,
         username: user.username,
@@ -374,11 +394,10 @@ const adminCtrl = {
     user.blockedAt = undefined;
     await user.save();
 
-
     await notificationService.notifyAccountUnblocked(
       req.params.id,
       req.user._id,
-      "Your account has been unblocked."
+      "Your account has been unblocked. Welcome back!"
     );
 
     const io = notificationService.getIO();
@@ -395,6 +414,7 @@ const adminCtrl = {
 
     res.json({
       msg: "User account unblocked successfully.",
+      notificationSent: true,
       user: {
         _id: user._id,
         username: user.username,
@@ -670,9 +690,9 @@ const adminCtrl = {
     }
 
     if (report.status !== "pending" && report.status !== "reviewing") {
-      return res.status(400).json({ 
+      return res.status(400).json({
         msg: "This report has already been processed.",
-        currentStatus: report.status 
+        currentStatus: report.status
       });
     }
 
@@ -736,9 +756,9 @@ const adminCtrl = {
           throw new NotFoundError("Target user not found");
         }
 
-        const shouldBlock = 
-          blockUser === true || 
-          actionTaken === "account_suspended" || 
+        const shouldBlock =
+          blockUser === true ||
+          actionTaken === "account_suspended" ||
           actionTaken === "account_banned";
 
         if (shouldBlock) {
@@ -749,8 +769,18 @@ const adminCtrl = {
           user.tokenVersion = (user.tokenVersion || 0) + 1;
           await user.save({ session });
 
-          const io = notificationService.getIO();
+          const blockType = actionTaken === "account_banned" 
+            ? "permanent_ban" 
+            : "admin_block";
           
+          await notificationService.notifyAccountBlocked(
+            user._id,
+            req.user._id,
+            user.blockedReason,
+            blockType
+          );
+
+          const io = notificationService.getIO();
           if (io) {
             io.to(user._id.toString()).emit("accountBlocked", {
               reason: user.blockedReason,
@@ -768,17 +798,6 @@ const adminCtrl = {
               socket.disconnect(true);
             }
           }
-
-          const newNotify = new Notifies({
-            recipients: [user._id],
-            user: req.user._id,
-            type: "warning",
-            text: `Your account has been ${actionTaken === "account_banned" ? "banned" : "suspended"}`,
-            content: adminNote || "Please contact support for more information.",
-            url: "/support",
-            isRead: false,
-          });
-          await newNotify.save({ session });
         } else if (actionTaken === "warning") {
           await notificationService.notifyWarning(
             user._id,
@@ -839,6 +858,7 @@ const adminCtrl = {
       await session.commitTransaction();
       res.json({
         msg: "Report accepted successfully.",
+        notificationsSent: true,
         report,
         actionTaken,
         affectedReports: report.reportType !== "message" ? "Multiple" : "Single",
@@ -868,9 +888,9 @@ const adminCtrl = {
     }
 
     if (report.status !== "pending" && report.status !== "reviewing") {
-      return res.status(400).json({ 
+      return res.status(400).json({
         msg: "This report has already been processed.",
-        currentStatus: report.status 
+        currentStatus: report.status
       });
     }
 
@@ -889,6 +909,7 @@ const adminCtrl = {
 
     res.json({
       msg: "Report declined successfully.",
+      notificationSent: true,
       report,
     });
   }),
@@ -1051,9 +1072,9 @@ const adminCtrl = {
     }
 
     if (report.status !== "pending") {
-      return res.status(400).json({ 
+      return res.status(400).json({
         msg: "Only pending reports can be marked as reviewing.",
-        currentStatus: report.status 
+        currentStatus: report.status
       });
     }
 
@@ -1131,8 +1152,13 @@ const adminCtrl = {
       }
     );
 
+    await notificationService.notifyAccountUnblocked(
+      userId,
+      req.user._id,
+      note || "Your account access has been restored."
+    );
+
     const io = notificationService.getIO();
-    
     if (io) {
       io.to(userId).emit("accountUnblocked", {
         message: "Your account has been unblocked.",
@@ -1140,17 +1166,6 @@ const adminCtrl = {
         note: note,
       });
     }
-
-    const newNotify = new Notifies({
-      recipients: [userId],
-      user: req.user._id,
-      type: "follow", 
-      text: "Your account has been unblocked",
-      content: note || "Your account access has been restored.",
-      url: "/",
-      isRead: false,
-    });
-    await newNotify.save();
 
     logger.audit("User unblocked by admin", req.user._id, {
       targetUserId: userId,
@@ -1160,6 +1175,7 @@ const adminCtrl = {
 
     res.json({
       msg: "User unblocked successfully.",
+      notificationSent: true,
       user: {
         _id: user._id,
         username: user.username,
@@ -1172,7 +1188,7 @@ const adminCtrl = {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
-    const blockType = req.query.blockType; 
+    const blockType = req.query.blockType;
 
     let query = { isBlocked: true };
 
@@ -1340,15 +1356,13 @@ const adminCtrl = {
         socket.disconnect(true);
       }
 
-      if (action !== "unblock") {
-        await notificationService.notifyAccountBlocked(
-          userId,
-          req.user._id,
-          reason,
-          blockType,
-          expiresAt
-        );
-      }
+      await notificationService.notifyAccountBlocked(
+        userId,
+        req.user._id,
+        reason,
+        blockType,
+        expiresAt
+      );
     }
 
     logger.audit(`User ${action} action`, req.user._id, {
@@ -1360,6 +1374,7 @@ const adminCtrl = {
 
     res.json({
       msg: actionMessage,
+      notificationSent: action !== "unblock",
       user: {
         _id: user._id,
         username: user.username,

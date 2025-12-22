@@ -25,17 +25,23 @@ const notifySchema = new Schema(
         "story_view",
         "story_reply",
         "group_mention",
+        "group_invite",
+        "group_removed",
+        "group_role_changed",
         "friend_request",
         "friend_accept",
-        "report_created",      // Admin nhận thông báo report mới
-        "report_accepted",     // Reporter nhận report được chấp nhận
-        "report_declined",     // Reporter nhận report bị từ chối
-        "report_processed",    // Reporter nhận report đã xử lý (general)
-        "content_removed",     // Owner nhận content bị xóa
-        "account_blocked",     // User nhận account bị block
-        "account_unblocked",   // User nhận account được unblock
-        "warning",            // User nhận cảnh báo
-        "report_resolved",     // Reporter nhận report đã resolve
+        "report_created",         
+        "report_accepted",        
+        "report_declined",        
+        "report_resolved",        
+        "content_removed",        
+        "content_hidden",         
+        "account_blocked",        
+        "account_unblocked",      
+        "warning",               
+        "system_maintenance",    
+        "policy_update",        
+        "security_alert",     
       ],
       default: "like",
       index: true,
@@ -57,9 +63,22 @@ const notifySchema = new Schema(
       reportReason: String,
       reportStatus: String,
       actionTaken: String,
+      priority: String,
+      
       blockType: String,
       expiresAt: Date,
-      priority: String,
+      
+      contentType: String,
+      contentId: mongoose.Types.ObjectId,
+      reason: String,
+      
+      groupId: { type: mongoose.Types.ObjectId, ref: "group" },
+      groupName: String,
+      newRole: String,
+      
+      ipAddress: String,
+      device: String,
+      location: String,
     },
   },
   {
@@ -71,6 +90,8 @@ notifySchema.index({ recipients: 1, createdAt: -1 });
 notifySchema.index({ recipients: 1, isRead: 1 });
 notifySchema.index({ user: 1, type: 1 });
 notifySchema.index({ 'metadata.reportId': 1 });
+notifySchema.index({ type: 1, createdAt: -1 });
+notifySchema.index({ recipients: 1, type: 1, isRead: 1 });
 
 notifySchema.virtual("postData", {
   ref: "post",
@@ -84,6 +105,82 @@ notifySchema.virtual("commentData", {
   localField: "comment",
   foreignField: "_id",
   justOne: true,
+});
+
+notifySchema.methods.markAsRead = function() {
+  this.isRead = true;
+  return this.save();
+};
+
+notifySchema.methods.markAsUnread = function() {
+  this.isRead = false;
+  return this.save();
+};
+
+notifySchema.statics.getUnreadCount = function(userId) {
+  return this.countDocuments({
+    recipients: userId,
+    isRead: false
+  });
+};
+
+notifySchema.statics.markAllAsRead = function(userId) {
+  return this.updateMany(
+    { 
+      recipients: userId,
+      isRead: false 
+    },
+    { 
+      $set: { isRead: true } 
+    }
+  );
+};
+
+notifySchema.statics.getByType = function(userId, type, options = {}) {
+  const { page = 1, limit = 20 } = options;
+  const skip = (page - 1) * limit;
+
+  return this.find({
+    recipients: userId,
+    type: type
+  })
+    .populate("user", "username avatar fullname")
+    .sort("-createdAt")
+    .skip(skip)
+    .limit(limit);
+};
+
+notifySchema.statics.deleteOldNotifications = async function(daysOld = 90) {
+  const cutoffDate = new Date(Date.now() - daysOld * 24 * 60 * 60 * 1000);
+  
+  return this.deleteMany({
+    createdAt: { $lt: cutoffDate },
+    isRead: true
+  });
+};
+
+notifySchema.pre('save', function(next) {
+  if (!this.url) {
+    if (this.post) {
+      this.url = `/post/${this.post}`;
+    } else if (this.comment) {
+      this.url = `/comment/${this.comment}`;
+    } else if (this.metadata?.groupId) {
+      this.url = `/group/${this.metadata.groupId}`;
+    } else {
+      this.url = "/notifications";
+    }
+  }
+  next();
+});
+
+notifySchema.post('save', function(doc) {
+  const logger = require('../utils/logger');
+  logger.debug('Notification created', {
+    id: doc._id,
+    type: doc.type,
+    recipients: doc.recipients.length
+  });
 });
 
 module.exports = mongoose.model("notify", notifySchema);

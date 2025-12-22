@@ -74,7 +74,7 @@ const SocketServer = (httpServer) => {
       }
 
       if (cleanedUsers > 0 || cleanedAdmins > 0) {
-        logger.info(` Cleanup: ${cleanedUsers} users, ${cleanedAdmins} admins removed. Current: ${users.size} users, ${admins.size} admins`);
+        logger.info(`🧹 Cleanup: ${cleanedUsers} users, ${cleanedAdmins} admins removed. Current: ${users.size} users, ${admins.size} admins`);
       }
     } catch (error) {
       logger.error('Error in cleanupStaleConnections:', error);
@@ -139,6 +139,8 @@ const SocketServer = (httpServer) => {
         users.set(userId, socket.id);
         userSockets.set(socket.id, userId);
 
+        socket.join(userId);
+
         socket.broadcast.emit("userOnline", userId);
 
         socket.emit("connectionStatus", {
@@ -163,6 +165,9 @@ const SocketServer = (httpServer) => {
 
         const adminId = id.toString();
         admins.set(adminId, socket.id);
+        
+        socket.join('admin-room');
+        socket.join(adminId);
 
         socket.emit("activeUsers", {
           count: users.size,
@@ -206,6 +211,7 @@ const SocketServer = (httpServer) => {
       }
     });
 
+    
     const handlePostEvent = (eventName, clientEvent) => {
       socket.on(eventName, (newPost) => {
         try {
@@ -229,6 +235,7 @@ const SocketServer = (httpServer) => {
     handlePostEvent("createComment", "createCommentToClient");
     handlePostEvent("deleteComment", "deleteCommentToClient");
 
+    
     socket.on("sharePost", (data) => {
       try {
         if (!data || !data.sharedPost || !data.originalPost) {
@@ -336,6 +343,7 @@ const SocketServer = (httpServer) => {
       }
     });
 
+    
     socket.on("createNotify", (msg) => {
       try {
         if (!msg || !msg.recipients) {
@@ -344,12 +352,55 @@ const SocketServer = (httpServer) => {
         }
 
         const recipients = Array.isArray(msg.recipients) ? msg.recipients : [msg.recipients];
-        safeEmitToUsers(socket, recipients, "createNotifyToClient", msg);
+        
+        recipients.forEach(recipientId => {
+          const recipientSocketId = users.get(recipientId.toString());
+          if (recipientSocketId && io.sockets.sockets.has(recipientSocketId)) {
+            io.to(recipientId.toString()).emit("createNotifyToClient", {
+              ...msg,
+              timestamp: new Date().toISOString()
+            });
+          }
+        });
+        
+        logger.debug('Notification sent', {
+          type: msg.type,
+          recipients: recipients.length
+        });
       } catch (error) {
         handleSocketError(socket, 'createNotify', error, { msg });
       }
     });
 
+    socket.on("removeNotify", (data) => {
+      try {
+        if (!data || !data.notifyId) return;
+        
+        if (data.recipientId) {
+          io.to(data.recipientId.toString()).emit("removeNotifyToClient", {
+            notifyId: data.notifyId,
+            timestamp: new Date().toISOString()
+          });
+        }
+      } catch (error) {
+        handleSocketError(socket, 'removeNotify', error, { data });
+      }
+    });
+
+    socket.on("markNotifyRead", (data) => {
+      try {
+        if (!data || !data.notifyId || !data.userId) return;
+        
+        io.to(data.userId.toString()).emit("notifyMarkedRead", {
+          notifyId: data.notifyId,
+          timestamp: new Date().toISOString()
+        });
+      } catch (error) {
+        handleSocketError(socket, 'markNotifyRead', error, { data });
+      }
+    });
+
+    
     socket.on("addMessage", (msg) => {
       try {
         if (!msg || !msg.recipient) {
@@ -396,6 +447,7 @@ const SocketServer = (httpServer) => {
       }
     });
 
+    
     socket.on("createStory", (data) => {
       try {
         if (!data || !data.story) {
@@ -414,6 +466,7 @@ const SocketServer = (httpServer) => {
       }
     });
 
+    
     socket.on("joinGroup", (groupId) => {
       try {
         if (!groupId) {
@@ -479,39 +532,20 @@ const SocketServer = (httpServer) => {
       }
     });
 
-    socket.on("editGroupMessage", (data) => {
+    
+    socket.on("adminBroadcast", (data) => {
       try {
-        if (!data || !data.groupId) return;
+        if (!admins.has(userSockets.get(socket.id))) {
+          logger.warn('Non-admin tried to broadcast');
+          return;
+        }
 
-        const roomName = `group_${data.groupId}`;
-        socket.to(roomName).emit("groupMessageEdited", data);
-      } catch (error) {
-        handleSocketError(socket, 'editGroupMessage', error, { data });
-      }
-    });
-
-    socket.on("pinGroupMessage", (data) => {
-      try {
-        if (!data || !data.groupId) return;
-
-        const roomName = `group_${data.groupId}`;
-        socket.to(roomName).emit("groupMessagePinned", data);
-      } catch (error) {
-        handleSocketError(socket, 'pinGroupMessage', error, { data });
-      }
-    });
-
-    socket.on("groupCallStarted", (data) => {
-      try {
-        if (!data || !data.groupId) return;
-
-        const roomName = `group_${data.groupId}`;
-        socket.to(roomName).emit("incomingGroupCall", {
+        io.emit("adminAnnouncement", {
           ...data,
           timestamp: new Date().toISOString()
         });
       } catch (error) {
-        handleSocketError(socket, 'groupCallStarted', error, { data });
+        handleSocketError(socket, 'adminBroadcast', error, { data });
       }
     });
 
@@ -520,6 +554,7 @@ const SocketServer = (httpServer) => {
     });
   });
 
+  
   io.getStats = () => ({
     totalUsers: users.size,
     totalAdmins: admins.size,
