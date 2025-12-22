@@ -1,5 +1,6 @@
 const Stories = require("../models/storyModel");
 const Users = require("../models/userModel");
+const notificationService = require("../services/notificationService");
 const { asyncHandler } = require("../middleware/errorHandler");
 const { NotFoundError, ValidationError } = require("../utils/AppError");
 
@@ -135,24 +136,24 @@ const storyCtrl = {
     const story = await Stories.findOneAndUpdate(
       {
         _id: storyId,
-        'views.user': { $ne: req.user._id }  
+        "views.user": { $ne: req.user._id },
       },
       {
         $push: {
-          views: { 
-            user: req.user._id, 
-            viewedAt: new Date() 
-          }
-        }
+          views: {
+            user: req.user._id,
+            viewedAt: new Date(),
+          },
+        },
       },
       { new: true }
-    );
+    ).populate("user", "username avatar fullname");
 
     if (!story) {
       const existingStory = await Stories.findById(storyId);
-      
+
       if (!existingStory) {
-        throw new NotFoundError('Story');
+        throw new NotFoundError("Story");
       }
 
       return res.json({
@@ -160,6 +161,8 @@ const storyCtrl = {
         viewsCount: existingStory.views.length,
       });
     }
+
+    await notificationService.notifyStoryView(story, req.user);
 
     res.json({
       msg: "Story viewed",
@@ -177,7 +180,7 @@ const storyCtrl = {
 
     const story = await Stories.findById(storyId).populate(
       "user",
-      "username avatar"
+      "username avatar fullname"
     );
 
     if (!story) {
@@ -201,6 +204,8 @@ const storyCtrl = {
         avatar: req.user.avatar,
       },
     };
+
+    await notificationService.notifyStoryReply(story, reply, req.user);
 
     res.json({
       msg: "Reply sent successfully",

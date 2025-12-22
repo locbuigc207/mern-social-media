@@ -21,12 +21,13 @@ const {
 } = require("./utils/cleanupScheduler");
 const { closeRateLimiter } = require("./middleware/rateLimiter");
 const { errorHandler, notFound } = require("./middleware/errorHandler");
+const notificationService = require("./services/notificationService");
 
 const app = express();
 
 app.use(
   helmet({
-    crossOriginResourcePolicy: { policy: "cross-origin" }, //DEBUG
+    crossOriginResourcePolicy: { policy: "cross-origin" },
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
@@ -151,6 +152,7 @@ app.get("/health", async (req, res) => {
 
   res.status(allServicesHealthy ? 200 : 503).json(health);
 });
+
 app.get("/api", (req, res) => {
   res.json({
     message: "Social Network API is running!",
@@ -163,6 +165,7 @@ app.get("/api", (req, res) => {
     },
   });
 });
+
 app.use("/api", require("./routes/authRouter"));
 app.use("/api", require("./routes/userRouter"));
 app.use("/api", require("./routes/postRouter"));
@@ -175,7 +178,6 @@ app.use("/api", require("./routes/groupRouter"));
 app.use("/api", require("./routes/hashtagRouter"));
 
 app.use(notFound);
-
 app.use(errorHandler);
 
 const validateEnv = () => {
@@ -320,6 +322,9 @@ const startServer = async () => {
 
     io = SocketServer(httpServer);
     logger.info("Socket.IO: Enabled");
+
+    notificationService.initialize(io);
+    logger.info(" NotificationService initialized");
 
     shutdownManager.register("http", async () => {
       return new Promise((resolve) => {

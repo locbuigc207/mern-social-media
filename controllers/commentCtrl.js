@@ -2,6 +2,7 @@ const Comments = require("../models/commentModel");
 const Posts = require("../models/postModel");
 const Reports = require("../models/reportModel");
 const logger = require("../utils/logger");
+const notificationService = require("../services/notificationService");
 const { asyncHandler } = require("../middleware/errorHandler");
 const { NotFoundError, ValidationError } = require("../utils/AppError");
 const { REPORT_REASONS, REPORT_PRIORITY } = require("../constants");
@@ -10,14 +11,21 @@ const commentCtrl = {
   createComment: asyncHandler(async (req, res) => {
     const { postId, content, tag, reply, postUserId } = req.body;
 
-    const post = await Posts.findById(postId);
+    const post = await Posts.findById(postId).populate(
+      "user",
+      "username avatar fullname"
+    );
     if (!post) {
       throw new NotFoundError("Post");
     }
 
+    let originalComment = null;
     if (reply) {
-      const cm = await Comments.findById(reply);
-      if (!cm) {
+      originalComment = await Comments.findById(reply).populate(
+        "user",
+        "username avatar fullname"
+      );
+      if (!originalComment) {
         throw new NotFoundError("Comment");
       }
     }
@@ -41,33 +49,34 @@ const commentCtrl = {
       { new: true }
     );
 
-    if (post.user.toString() !== req.user._id.toString()) {
-      // Xác định người nhận (Chủ bài viết hoặc người được reply)
-      let recipients = [post.user];
-      let notifyText = "đã bình luận bài viết của bạn.";
+    if (reply && originalComment) {
+      await notificationService.notifyReplyComment(
+        post,
+        originalComment,
+        newComment,
+        req.user
+      );
+    } else {
+      await notificationService.notifyComment(post, newComment, req.user);
+    }
 
-      if (reply) {
-        const cm = await Comments.findById(reply);
-        if (cm) {
-          recipients = [cm.user];
-          notifyText = "đã trả lời bình luận của bạn.";
-        }
+    const mentionRegex = /@(\w+)/g;
+    const mentions = content.match(mentionRegex);
+    if (mentions) {
+      const Users = require("../models/userModel");
+      const usernames = mentions.map((m) => m.slice(1)); 
+      const mentionedUsers = await Users.find({
+        username: { $in: usernames },
+      }).select("_id");
+
+      if (mentionedUsers.length > 0) {
+        await notificationService.notifyMention(
+          mentionedUsers.map((u) => u._id),
+          req.user,
+          post,
+          newComment
+        );
       }
-
-      const notify = new Notifies({
-        id: post._id,
-        text: notifyText,
-        recipients: recipients,
-        url: `/post/${post._id}`,
-        content: content,
-
-        // Lấy .url của object ảnh đầu tiên. Nếu không có ảnh thì để chuỗi rỗng.
-        image: post.images && post.images.length > 0 ? post.images[0].url : "",
-
-        user: req.user._id,
-      });
-
-      await notify.save();
     }
 
     res.json({ newComment });
@@ -99,7 +108,7 @@ const commentCtrl = {
         $addToSet: { likes: req.user._id },
       },
       { new: true }
-    );
+    ).populate("user", "username avatar fullname");
 
     if (!comment) {
       const existingComment = await Comments.findById(req.params.id);
@@ -110,6 +119,9 @@ const commentCtrl = {
         msg: "You have already liked this comment",
       });
     }
+
+    const post = await Posts.findById(comment.postId);
+    await notificationService.notifyLikeComment(comment, post, req.user);
 
     res.json({
       msg: "Comment liked successfully.",

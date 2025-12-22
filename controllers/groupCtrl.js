@@ -2,6 +2,7 @@ const Groups = require("../models/groupModel");
 const GroupMessages = require("../models/groupMessageModel");
 const Users = require("../models/userModel");
 const mongoose = require("mongoose");
+const notificationService = require("../services/notificationService");
 const { asyncHandler } = require("../middleware/errorHandler");
 const { NotFoundError, ValidationError, AuthorizationError } = require("../utils/AppError");
 
@@ -170,6 +171,15 @@ const groupCtrl = {
         .populate("sender", "username avatar fullname")
         .populate("replyTo")
         .populate("mentions", "username avatar");
+
+      if (mentions && mentions.length > 0) {
+        await notificationService.notifyGroupMention(
+          mentions,
+          req.user,
+          group,
+          newMessage
+        );
+      }
 
       res.json({
         msg: "Message sent successfully!",

@@ -1,13 +1,14 @@
 const Users = require("../models/userModel");
 const Conversations = require("../models/conversationModel");
 const Messages = require("../models/messageModel");
+const Reports = require("../models/reportModel");
 const { asyncHandler } = require("../middleware/errorHandler");
 const {
   ValidationError,
   NotFoundError,
   ConflictError,
 } = require("../utils/AppError");
-const Reports = require("../models/reportModel");
+const notificationService = require("../services/notificationService");
 
 const userCtrl = {
   searchUser: asyncHandler(async (req, res) => {
@@ -168,7 +169,6 @@ const userCtrl = {
         gender: gender || "male",
       };
 
-      // Handle local file uploads
       if (req.files) {
         const port = process.env.PORT || 4000;
         const baseUrl = `http://localhost:${port}/uploads`;
@@ -391,6 +391,8 @@ const userCtrl = {
         { $addToSet: { following: req.params.id } },
         { new: true, session }
       );
+      
+      await notificationService.notifyFollow(targetUser, req.user);
 
       await session.commitTransaction();
       res.json({ newUser });
@@ -491,34 +493,31 @@ const userCtrl = {
       result: users.length,
     });
   }),
+
   reportUser: asyncHandler(async (req, res) => {
-    const { id } = req.params; // ID của người bị báo cáo (Target)
+    const { id } = req.params;
     const { reason, description } = req.body;
 
-    // 1. Validate: Không được tự báo cáo chính mình
     if (id === req.user._id.toString()) {
       throw new ValidationError("Bạn không thể tự báo cáo chính mình.");
     }
 
-    // 2. Kiểm tra User tồn tại
     const user = await Users.findById(id);
     if (!user) {
       throw new NotFoundError("Người dùng không tồn tại.");
     }
 
-    // 3. Kiểm tra trùng lặp (Người này đã báo cáo User kia chưa và đơn còn đang treo)
     const existingReport = await Reports.findOne({
       reportType: "user",
       targetId: id,
       reportedBy: req.user._id,
-      status: "pending", // Chỉ chặn nếu đơn cũ chưa được Admin xử lý
+      status: "pending",
     });
 
     if (existingReport) {
       throw new ValidationError("Bạn đã gửi báo cáo về người dùng này rồi.");
     }
 
-    // 4. TẠO REPORT MỚI (Lưu vào Collection Reports)
     const newReport = new Reports({
       reportType: "user",
       targetId: id,
@@ -527,13 +526,11 @@ const userCtrl = {
       reason,
       description: description || "Không có mô tả",
       status: "pending",
-      priority: "medium", // Mặc định là medium
+      priority: "medium",
     });
 
     await newReport.save();
 
-    // 5. CẬP NHẬT USER (Push ID Report vào mảng & Kiểm tra Auto-Block)
-    // Dùng { new: true } để lấy dữ liệu mới nhất sau khi update
     const updatedUser = await Users.findByIdAndUpdate(
       id,
       { $push: { reports: newReport._id } },
@@ -542,22 +539,15 @@ const userCtrl = {
 
     let autoBlocked = false;
 
-    // --- LOGIC TỰ ĐỘNG KHÓA ---
-    // Điều kiện: Chưa bị khóa VÀ số lượng report >= ngưỡng
     if (!updatedUser.isBlocked && updatedUser.reports.length >= 5) {
       updatedUser.isBlocked = true;
       updatedUser.blockedReason = `Hệ thống tự động khóa: Nhận ${updatedUser.reports.length} báo cáo vi phạm.`;
       updatedUser.blockedAt = new Date();
 
-      // Lưu ý: blockedByAdmin trong Schema của bạn là ObjectId (ref User).
-      // Vì đây là hệ thống khóa, ta không gán ID admin cụ thể, hoặc gán ID của Super Admin nếu có.
-      // Ở đây ta để trống trường blockedByAdmin, chỉ dựa vào blockedReason để biết là System.
-
       await updatedUser.save();
       autoBlocked = true;
     }
 
-    // 6. Phản hồi
     res.json({
       msg: autoBlocked
         ? "Đã gửi báo cáo. Tài khoản này đã bị khóa tạm thời do nhận nhiều cảnh báo."

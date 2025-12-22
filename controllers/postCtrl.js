@@ -17,6 +17,7 @@ const {
   NotFoundError,
   AuthorizationError,
 } = require("../utils/AppError");
+const notificationService = require("../services/notificationService");
 
 class APIfeatures {
   constructor(query, queryString) {
@@ -542,7 +543,7 @@ const postCtrl = {
         $addToSet: { likes: req.user._id },
       },
       { new: true }
-    );
+    ).populate("user", "username avatar fullname");
 
     if (!post) {
       const existingPost = await Posts.findById(req.params.id);
@@ -558,6 +559,8 @@ const postCtrl = {
         msg: "You have already liked this post",
       });
     }
+
+    await notificationService.notifyLikePost(post, req.user);
 
     res.json({
       msg: "Post liked successfully.",
@@ -586,6 +589,8 @@ const postCtrl = {
         msg: "You haven't liked this post",
       });
     }
+
+    await notificationService.removeNotifyLikePost(req.params.id, req.user._id);
 
     res.json({
       msg: "Post unliked successfully.",
@@ -959,7 +964,9 @@ const postCtrl = {
     session.startTransaction();
 
     try {
-      const originalPost = await Posts.findById(postId).session(session);
+      const originalPost = await Posts.findById(postId)
+        .session(session)
+        .populate("user", "username avatar fullname");
 
       if (!originalPost) {
         await session.abortTransaction();
@@ -1017,22 +1024,11 @@ const postCtrl = {
         await processHashtags(sharedPost._id, shareCaption, session);
       }
 
-      if (originalPost.user.toString() !== req.user._id.toString()) {
-        const notification = new Notifies({
-          id: sharedPost._id,
-          user: req.user._id,
-          recipients: [originalPost.user],
-          url: `/post/${sharedPost._id}`,
-          text: "shared your post",
-          content: shareCaption || originalPost.content,
-          image:
-            originalPost.images && originalPost.images.length > 0
-              ? originalPost.images[0].url
-              : "",
-        });
-
-        await notification.save({ session });
-      }
+      await notificationService.notifySharePost(
+        originalPost,
+        sharedPost,
+        req.user
+      );
 
       await session.commitTransaction();
 
