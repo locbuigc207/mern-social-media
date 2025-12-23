@@ -1,3 +1,4 @@
+// src/components/user/PostCard.jsx
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -27,6 +28,7 @@ import { getCurrentUser } from "../../api/user";
 import ConfirmModal from "../user/ConfirmModal";
 import CommentItem from "./CommentItem";
 import ReportPostModal from "./ReportPostModal";
+// Import đã được xác nhận tồn tại
 import SharePostModal from "./SharePostModal";
 
 export default function PostCard({ post, onUpdate, onDelete, onUnSave }) {
@@ -53,6 +55,7 @@ export default function PostCard({ post, onUpdate, onDelete, onUnSave }) {
 
   const [isUpdating, setIsUpdating] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  
   // Menu & Modals
   const [showMenu, setShowMenu] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -71,7 +74,6 @@ export default function PostCard({ post, onUpdate, onDelete, onUnSave }) {
 
         const isLiked = likesArray.some((like) => {
           const likeId = like._id ? like._id : like;
-
           return String(likeId) === String(user._id);
         });
         if (isLiked) {
@@ -123,6 +125,7 @@ export default function PostCard({ post, onUpdate, onDelete, onUnSave }) {
   const handleRemoveOldImage = (indexToRemove) => {
     setKeptImages((prev) => prev.filter((_, i) => i !== indexToRemove));
   };
+  
   //3. Xoá ảnh mới
   const handleRemoveNewImage = (indexToRemove) => {
     setNewImages((prev) => prev.filter((_, i) => i !== indexToRemove));
@@ -132,6 +135,7 @@ export default function PostCard({ post, onUpdate, onDelete, onUnSave }) {
       return prev.filter((_, i) => i !== indexToRemove);
     });
   };
+
   const handleUpdatePost = async () => {
     if (
       !editContent.trim() &&
@@ -141,21 +145,17 @@ export default function PostCard({ post, onUpdate, onDelete, onUnSave }) {
       return alert("Bài viết phải có nội dung hoặc hình ảnh!");
     }
 
-    setIsUpdating(true); //Bắt đầu loading
+    setIsUpdating(true);
     try {
-      //FormData để gửi file+text
       const formData = new FormData();
       formData.append("content", editContent);
-
       formData.append("existingImages", JSON.stringify(keptImages));
 
-      // Gửi file ảnh MỚI
       newImages.forEach((file) => {
         formData.append("files", file);
       });
-      //Gọi API Update
-      const res = await updatePost(post._id, formData);
 
+      const res = await updatePost(post._id, formData);
       const updatedPostData = res.newPost || res.data?.newPost || res;
 
       if (onUpdate) {
@@ -163,15 +163,15 @@ export default function PostCard({ post, onUpdate, onDelete, onUnSave }) {
       }
       setIsEditing(false);
 
-      // Reset state ảnh mới để tránh bị lưu đè lần sau
       setNewImages([]);
       setNewImagesPreview([]);
     } catch (err) {
       alert(err.response?.data?.msg || "Lỗi khi cập nhật bài viết");
     } finally {
-      setIsUpdating(true);
+      setIsUpdating(false);
     }
   };
+
   //TODO LIKE
   const handleLike = async () => {
     if (!currentUser) return alert("Vui lòng đăng nhập!");
@@ -182,10 +182,8 @@ export default function PostCard({ post, onUpdate, onDelete, onUnSave }) {
     try {
       if (liked) {
         await unLikePost(post._id);
-        console.log("Unlike thành công");
       } else {
         await likePost(post._id);
-        console.log("Like thành công");
       }
     } catch (err) {
       setLiked(liked);
@@ -230,17 +228,12 @@ export default function PostCard({ post, onUpdate, onDelete, onUnSave }) {
   const handleCommentSubmit = async (e) => {
     e.preventDefault();
     if (!commentContent.trim()) return;
-    console.log("Check Post Info:", {
-      id: post?._id,
-      user: post?.user?._id,
-      content: commentContent,
-    });
+
     if (!post?._id) {
       return alert("Lỗi: Không tìm thấy ID bài viết!");
     }
     setIsSubmitting(true);
     try {
-      // Gọi API
       const res = await createComment({
         postId: post._id,
         content: commentContent,
@@ -264,10 +257,12 @@ export default function PostCard({ post, onUpdate, onDelete, onUnSave }) {
       setIsSubmitting(false);
     }
   };
+
   //TODO DELETE COMMENT
   const handleDeleteCommentSuccess = (deletedCommentId) => {
     setComments(comments.filter((c) => c._id !== deletedCommentId));
   };
+
   const commentsToShow = showAllComments ? comments : comments.slice(0, 2);
 
   //TODO RENDER ẢNH
@@ -323,7 +318,6 @@ export default function PostCard({ post, onUpdate, onDelete, onUnSave }) {
                 onClick={() => setShowMenu(false)}
               ></div>
               <div className="absolute right-0 mt-1 bg-white rounded-lg shadow-xl border border-gray-100 w-56 z-20 overflow-hidden py-1">
-                {/* Nút Lưu bài viết */}
                 <button
                   onClick={handleSave}
                   className="flex items-center gap-3 w-full text-left px-4 py-3 hover:bg-gray-50 text-gray-700 transition text-sm"
@@ -332,7 +326,6 @@ export default function PostCard({ post, onUpdate, onDelete, onUnSave }) {
                   {isSaved ? "Bỏ lưu bài viết" : "Lưu bài viết"}
                 </button>
 
-                {/* Nút Báo cáo */}
                 <button
                   onClick={() => {
                     setIsReportPostModalOpen(true);
@@ -343,7 +336,6 @@ export default function PostCard({ post, onUpdate, onDelete, onUnSave }) {
                   <FiFlag /> Báo cáo vi phạm
                 </button>
 
-                {/* Nút Xóa + Sửa(Chỉ Owner mới thấy) */}
                 {isOwner && (
                   <div>
                     <button
@@ -375,7 +367,6 @@ export default function PostCard({ post, onUpdate, onDelete, onUnSave }) {
       {/* Nội dung */}
       <div className="mt-3">
         {isEditing ? (
-          // Giao diện khi đang sửa
           <div className="animate-fadeIn">
             <textarea
               className="w-full p-3 border rounded-lg bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all resize-none"
@@ -384,13 +375,10 @@ export default function PostCard({ post, onUpdate, onDelete, onUnSave }) {
               onChange={(e) => setEditContent(e.target.value)}
               placeholder="Bạn đang nghĩ gì?"
             />
-            {/* 2. Quản lý ảnh */}
             <div className="mt-3">
               <p className="text-sm font-medium mb-2">Hình ảnh:</p>
 
-              {/* Grid hiển thị ảnh */}
               <div className="grid grid-cols-3 gap-2 mb-2">
-                {/* Ảnh cũ (keptImages) */}
                 {keptImages.map((img, idx) => (
                   <div
                     key={img.publicId || img.url || idx}
@@ -411,7 +399,6 @@ export default function PostCard({ post, onUpdate, onDelete, onUnSave }) {
                   </div>
                 ))}
 
-                {/* Ảnh mới (newImagesPreview) */}
                 {newImagesPreview.map((src, idx) => (
                   <div
                     key={`new-${idx}`}
@@ -432,7 +419,6 @@ export default function PostCard({ post, onUpdate, onDelete, onUnSave }) {
                   </div>
                 ))}
 
-                {/* Nút thêm ảnh */}
                 <div
                   onClick={() => fileInputRef.current.click()}
                   className="flex flex-col items-center justify-center bg-gray-100 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:bg-gray-200 aspect-square transition"
@@ -442,7 +428,6 @@ export default function PostCard({ post, onUpdate, onDelete, onUnSave }) {
                 </div>
               </div>
 
-              {/* Input file ẩn */}
               <input
                 type="file"
                 multiple
@@ -457,7 +442,7 @@ export default function PostCard({ post, onUpdate, onDelete, onUnSave }) {
               <button
                 onClick={() => {
                   setIsEditing(false);
-                  setEditContent(post.content); // Reset về nội dung cũ
+                  setEditContent(post.content);
                   setKeptImages(post.images || []);
                   setNewImages([]);
                   setNewImagesPreview([]);
@@ -475,7 +460,6 @@ export default function PostCard({ post, onUpdate, onDelete, onUnSave }) {
               >
                 {isUpdating ? (
                   <>
-                    {/* quá trình loading */}
                     <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
                     <span>Đang lưu...</span>
                   </>
@@ -487,26 +471,21 @@ export default function PostCard({ post, onUpdate, onDelete, onUnSave }) {
           </div>
         ) : (
           <>
-            {/* TRƯỜNG HỢP 1: BÀI VIẾT ĐƯỢC CHIA SẺ */}
             {post.isShared && post.originalPost ? (
               <div className="space-y-3">
-                {/* 1. Caption của người share */}
                 {post.shareCaption && (
                   <p className="text-gray-800 whitespace-pre-wrap text-[15px]">
                     {post.shareCaption}
                   </p>
                 )}
 
-                {/* 2. Khung chứa bài gốc (Clickable) */}
                 <div
                   className="border border-gray-200 rounded-xl overflow-hidden cursor-pointer hover:bg-gray-50 transition-colors"
                   onClick={(e) => {
                     e.stopPropagation();
-                    // Chuyển hướng đến bài viết gốc
                     navigate(`/post/${post.originalPost._id}`);
                   }}
                 >
-                  {/* Header bài gốc */}
                   <div className="flex items-center gap-2 p-3 bg-gray-50/50 border-b border-gray-100">
                     <img
                       src={post.originalPost.user?.avatar || "/avatar.png"}
@@ -525,18 +504,15 @@ export default function PostCard({ post, onUpdate, onDelete, onUnSave }) {
                     </div>
                   </div>
 
-                  {/* Nội dung bài gốc */}
                   <div className="p-3">
                     <p className="text-gray-800 text-sm whitespace-pre-wrap mb-2">
                       {post.originalPost.content}
                     </p>
-                    {/* Ảnh bài gốc */}
                     {renderImages(post.originalPost.images)}
                   </div>
                 </div>
               </div>
             ) : (
-              // TRƯỜNG HỢP 2: BÀI VIẾT THƯỜNG
               <>
                 <p className="text-gray-800 whitespace-pre-wrap">
                   {post.content}
@@ -685,6 +661,8 @@ export default function PostCard({ post, onUpdate, onDelete, onUnSave }) {
         onClose={() => setIsReportPostModalOpen(false)}
         postId={post._id}
       />
+      
+      {/* Modal Share */}
       <SharePostModal
         isOpen={isShareModalOpen}
         onClose={() => setIsShareModalOpen(false)}

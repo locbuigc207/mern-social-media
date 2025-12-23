@@ -14,44 +14,55 @@ import {
   markAllNotificationsAsRead,
 } from "../../api/notification";
 import { Link } from "react-router-dom";
+import { toast } from 'react-hot-toast';
 
 const NotificationDropdown = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
   const dropdownRef = useRef(null);
 
   // Lấy danh sách thông báo
   useEffect(() => {
     const fetchNotifications = async () => {
       try {
+        setLoading(true);
+        setError(null);
         const res = await getNotifications();
         setNotifications(res.notifies || []);
         setUnreadCount(res.result || 0);
       } catch (err) {
         console.error("Lỗi load thông báo:", err);
+        setError(err.message);
+        toast.error("Không thể tải thông báo");
+      } finally {
+        setLoading(false);
       }
     };
     fetchNotifications();
   }, []);
 
-  //Đóng/ mở dropdown
+  // Đóng/mở dropdown
   const handleToggle = () => {
     setIsOpen(!isOpen);
   };
-  //Đánh dấu all đã đọc
+
+  // Đánh dấu tất cả đã đọc
   const handleMarkAllRead = async () => {
     if (unreadCount === 0) return;
 
     try {
       await markAllNotificationsAsRead();
-
       setUnreadCount(0);
       setNotifications((prev) =>
         prev.map((noti) => ({ ...noti, isRead: true }))
       );
+      toast.success("Đã đánh dấu tất cả là đã đọc");
     } catch (err) {
       console.error("Lỗi đánh dấu đã đọc:", err);
+      toast.error("Không thể đánh dấu đã đọc");
     }
   };
 
@@ -67,7 +78,6 @@ const NotificationDropdown = () => {
   }, []);
 
   const getNotificationIcon = (noti) => {
-    //! TẠM THỜI CHECK DỰA VÀO TEXT
     const text = noti.text || "";
     if (text.includes("thích") || text.includes("like"))
       return <FiHeart className="text-red-500" />;
@@ -114,10 +124,25 @@ const NotificationDropdown = () => {
               </button>
             )}
           </div>
+
           <div className="overflow-y-auto max-h-96">
-            {notifications.length === 0 ? (
+            {/* Hiển thị lỗi */}
+            {error && (
+              <div className="p-4 text-center text-red-600 text-sm">
+                {error}
+                <button
+                  onClick={() => window.location.reload()}
+                  className="block mx-auto mt-2 text-blue-600 hover:underline"
+                >
+                  Thử lại
+                </button>
+              </div>
+            )}
+
+            {/* Hiển thị danh sách thông báo */}
+            {!error && notifications.length === 0 ? (
               <div className="p-8 text-center text-gray-500">
-                Chưa có thông báo nào
+                {loading ? "Đang tải..." : "Chưa có thông báo nào"}
               </div>
             ) : (
               <ul>
@@ -151,13 +176,11 @@ const NotificationDropdown = () => {
                       </div>
 
                       {/* Nếu có post thì hiển thị ảnh preview */}
-                      {/* Chú ý logic hiển thị ảnh: Dựa vào noti.image nếu không phải avatar, hoặc logic riêng */}
                       {noti.image && noti.image !== noti.user?.avatar && (
                         <Link
                           to={`/post/${noti.id}`}
                           onClick={() => setIsOpen(false)}
                         >
-                          {/* Lưu ý: Link tới post có thể cần sửa id tùy thuộc structure backend trả về url hay id bài viết */}
                           <img
                             src={noti.image}
                             alt="content"
@@ -167,7 +190,7 @@ const NotificationDropdown = () => {
                       )}
                     </div>
 
-                    {/* Chấm xanh báo chưa đọc (Optional) */}
+                    {/* Chấm xanh báo chưa đọc */}
                     {!noti.isRead && (
                       <div className="w-2 h-2 bg-blue-500 rounded-full mt-2 shrink-0"></div>
                     )}
