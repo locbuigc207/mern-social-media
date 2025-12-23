@@ -273,8 +273,6 @@ const userSchema = new mongoose.Schema(
   }
 );
 
-userSchema.index({ username: 1 }, { unique: true });
-userSchema.index({ email: 1 }, { unique: true });
 userSchema.index({ role: 1, isBlocked: 1 });
 userSchema.index({ followers: 1 });
 userSchema.index({ following: 1 });

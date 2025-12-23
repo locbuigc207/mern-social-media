@@ -70,6 +70,7 @@ const router = require("express").Router();
 const multer = require("multer"); // Thêm Multer
 const path = require("path");
 const fs = require("fs");
+const {uploadMultiple}=require("../middleware/upload")
 
 // --- 1. SỬA LỖI IMPORT AUTH ---
 // Logic: Tự động chọn .auth hoặc export mặc định để tránh lỗi "requires a callback"
@@ -83,59 +84,22 @@ const {
   interactionLimiter,
 } = require("../middleware/rateLimiter");
 
-// --- 2. CẤU HÌNH UPLOAD (Để sửa lỗi "Recipient is required") ---
-const uploadDir = path.join(__dirname, "../uploads");
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
+// Create message
+router.post("/message", auth, uploadMultiple, messageCtrl.createMessage);
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(
-      null,
-      file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname)
-    );
-  },
-});
+//create message from story reply
 
-const upload = multer({
-  storage: storage,
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
-  fileFilter: (req, file, cb) => {
-    if (
-      file.mimetype.startsWith("image/") ||
-      file.mimetype.startsWith("video/")
-    ) {
-      cb(null, true);
-    } else {
-      cb(new Error("File format not supported!"), false);
-    }
-  },
-});
-
-// Middleware xử lý upload: Bắt trường tên là "files" (khớp với Frontend React)
-const uploadFiles = upload.array("files", 10);
-
-// --- 3. ROUTES ---
-
-// Áp dụng Auth cho tất cả các route bên dưới
-router.use(auth);
-
-// Route tạo tin nhắn: Thêm uploadFiles vào để parse FormData
 router.post(
-  "/message",
-  messageLimiter,
-  uploadFiles, // <--- QUAN TRỌNG: Phải có dòng này thì req.body.recipient mới có dữ liệu
-  messageCtrl.createMessage
+  "/message/story-reply",
+  auth,
+  messageCtrl.createMessageFromStoryReply
 );
 
-router.get("/conversations", messageCtrl.getConversations);
+// Conversations
+router.get("/conversations", auth, messageCtrl.getConversations);
 
-router.get("/message/:id", validateObjectId("id"), messageCtrl.getMessages);
+// Messages in a conversation
+router.get("/message/:id", auth, messageCtrl.getMessages);
 
 // Đánh dấu đã đọc 1 tin
 router.patch(
@@ -174,15 +138,15 @@ router.get(
   messageCtrl.getUnreadByConversation
 );
 
-router.get("/messages/search", messageCtrl.searchMessages);
+//router.get("/messages/search", messageCtrl.searchMessages);
 
 // Reaction (Thả tim, icon)
-router.post(
+/*router.post(
   "/message/:messageId/react",
   validateObjectId("messageId"),
   interactionLimiter,
   messageCtrl.reactToMessage
-);
+);*/
 
 router.delete(
   "/message/:messageId/react",

@@ -10,7 +10,11 @@ const {
   getWelcomeEmailTemplate,
 } = require("../utils/sendMail");
 const { asyncHandler } = require("../middleware/errorHandler");
-const { ValidationError, AuthenticationError, ConflictError } = require("../utils/AppError");
+const {
+  ValidationError,
+  AuthenticationError,
+  ConflictError,
+} = require("../utils/AppError");
 
 const authCtrl = {
   register: asyncHandler(async (req, res) => {
@@ -32,7 +36,8 @@ const authCtrl = {
       throw new ValidationError("Password must be at least 8 characters long.");
     }
 
-    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/;
+    const passwordRegex =
+      /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/;
     if (!passwordRegex.test(password)) {
       throw new ValidationError(
         "Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character."
@@ -41,8 +46,16 @@ const authCtrl = {
 
     const passwordHash = await bcrypt.hash(password, 12);
 
-    const verificationToken = crypto.randomBytes(32).toString("hex");
-    const verificationTokenExpires = Date.now() + 24 * 60 * 60 * 1000;
+    // Tạm thời tắt email verification cho production
+    const skipEmailVerification =
+      process.env.SKIP_EMAIL_VERIFICATION === "true";
+
+    const verificationToken = skipEmailVerification
+      ? null
+      : crypto.randomBytes(32).toString("hex");
+    const verificationTokenExpires = skipEmailVerification
+      ? null
+      : Date.now() + 24 * 60 * 60 * 1000;
 
     const newUser = new Users({
       fullname,
@@ -52,42 +65,38 @@ const authCtrl = {
       gender,
       verificationToken,
       verificationTokenExpires,
-      isVerified: false,
+      isVerified: skipEmailVerification, // Auto-verify nếu skip email
     });
 
     await newUser.save();
 
-    const verificationLink = `${process.env.CLIENT_URL}/verify-email/${verificationToken}`;
-    const emailHtml = getVerificationEmailTemplate(fullname, verificationLink);
+    // Chỉ gửi email nếu không skip
+    if (!skipEmailVerification) {
+      const verificationLink = `${process.env.CLIENT_URL}/verify-email/${verificationToken}`;
+      const emailHtml = getVerificationEmailTemplate(
+        fullname,
+        verificationLink
+      );
 
-    try {
-      await sendEmail(email, "Verify Your Email - Campus Connect", emailHtml);
-
-      res.json({
-        msg: "Registration successful! Please check your email to verify your account.",
-        user: {
-          ...newUser._doc,
-          password: "",
-        },
-      });
-    } catch (emailError) {
-      console.error("Error sending verification email:", emailError);
-
-      res.json({
-        msg: "Registration successful! However, we couldn't send the verification email. Please request a new verification email.",
-        emailError: true,
-        user: {
-          ...newUser._doc,
-          password: "",
-        },
-      });
+      try {
+        await sendEmail(email, "Verify Your Email - Campus Connect", emailHtml);
+        res.json({
+          msg: "Registration successful! Please check your email to verify your account.",
+          user: {
+            ...newUser._doc,
+            password: "",
+          },
+        });
+      } catch (emailError) {
+        console.error("Error sending verification email:", emailError);
+      }
     }
   }),
 
   verifyEmail: asyncHandler(async (req, res) => {
     const { token } = req.params;
 
-    console.log('🔍 Verifying email with token:', token);
+    console.log("🔍 Verifying email with token:", token);
 
     const user = await Users.findOne({
       verificationToken: token,
@@ -98,22 +107,28 @@ const authCtrl = {
       const expiredUser = await Users.findOne({ verificationToken: token });
 
       if (expiredUser) {
-        console.log('⏰ Token found but expired');
-        throw new ValidationError("Verification token has expired. Please request a new verification email.");
+        console.log("⏰ Token found but expired");
+        throw new ValidationError(
+          "Verification token has expired. Please request a new verification email."
+        );
       } else {
-        console.log('❌ Token not found - User may have already verified or token is invalid');
-        throw new ValidationError("This verification link is invalid or has already been used. If you haven't verified your email yet, please request a new verification link.");
+        console.log(
+          "❌ Token not found - User may have already verified or token is invalid"
+        );
+        throw new ValidationError(
+          "This verification link is invalid or has already been used. If you haven't verified your email yet, please request a new verification link."
+        );
       }
     }
 
-    console.log('✅ User found:', user.email);
+    console.log("✅ User found:", user.email);
 
     user.isVerified = true;
     user.verificationToken = undefined;
     user.verificationTokenExpires = undefined;
     await user.save();
 
-    console.log('✅ User verified successfully');
+    console.log("✅ User verified successfully");
 
     const welcomeHtml = getWelcomeEmailTemplate(user.username);
     try {
@@ -164,7 +179,10 @@ const authCtrl = {
     await user.save();
 
     const verificationLink = `${process.env.CLIENT_URL}/verify-email/${verificationToken}`;
-    const emailHtml = getVerificationEmailTemplate(user.username, verificationLink);
+    const emailHtml = getVerificationEmailTemplate(
+      user.username,
+      verificationLink
+    );
 
     await sendEmail(email, "Verify Your Email - Campus Connect", emailHtml);
 
@@ -183,9 +201,11 @@ const authCtrl = {
     }
 
     if (user.resetPasswordExpires && user.resetPasswordExpires > Date.now()) {
-      const waitTime = Math.ceil((user.resetPasswordExpires - Date.now()) / 60000);
+      const waitTime = Math.ceil(
+        (user.resetPasswordExpires - Date.now()) / 60000
+      );
       return res.status(429).json({
-        msg: `Please wait ${waitTime} minutes before requesting another reset.`
+        msg: `Please wait ${waitTime} minutes before requesting another reset.`,
       });
     }
 
@@ -193,7 +213,7 @@ const authCtrl = {
       user.previousResetTokens = user.previousResetTokens || [];
       user.previousResetTokens.push({
         token: user.resetPasswordToken,
-        invalidatedAt: new Date()
+        invalidatedAt: new Date(),
       });
 
       if (user.previousResetTokens.length > 5) {
@@ -217,7 +237,7 @@ const authCtrl = {
       await user.save();
 
       return res.status(403).json({
-        msg: "Account locked due to suspicious activity. Contact support."
+        msg: "Account locked due to suspicious activity. Contact support.",
       });
     }
 
@@ -226,7 +246,11 @@ const authCtrl = {
     const resetLink = `${process.env.CLIENT_URL}/reset-password/${resetToken}`;
     const emailHtml = getPasswordResetTemplate(user.username, resetLink);
 
-    await sendEmail(email, "Password Reset Request - Campus Connect", emailHtml);
+    await sendEmail(
+      email,
+      "Password Reset Request - Campus Connect",
+      emailHtml
+    );
 
     res.json({
       msg: "If this email exists, you will receive a password reset link.",
@@ -245,7 +269,8 @@ const authCtrl = {
       throw new ValidationError("Password must be at least 8 characters long.");
     }
 
-    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/;
+    const passwordRegex =
+      /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/;
     if (!passwordRegex.test(password)) {
       throw new ValidationError(
         "Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character."
@@ -268,17 +293,21 @@ const authCtrl = {
 
       if (!user) {
         await session.abortTransaction();
-        throw new ValidationError("Password reset token is invalid or has expired.");
+        throw new ValidationError(
+          "Password reset token is invalid or has expired."
+        );
       }
 
       if (user.previousResetTokens && user.previousResetTokens.length > 0) {
         const isInvalidated = user.previousResetTokens.some(
-          old => old.token === resetPasswordToken
+          (old) => old.token === resetPasswordToken
         );
 
         if (isInvalidated) {
           await session.abortTransaction();
-          throw new ValidationError("This reset link has been invalidated. Please request a new one.");
+          throw new ValidationError(
+            "This reset link has been invalidated. Please request a new one."
+          );
         }
       }
 
@@ -294,7 +323,9 @@ const authCtrl = {
       await user.save({ session });
       await session.commitTransaction();
 
-      res.json({ msg: "Password reset successful! You can now login with your new password." });
+      res.json({
+        msg: "Password reset successful! You can now login with your new password.",
+      });
     } catch (error) {
       await session.abortTransaction();
       throw error;
@@ -330,7 +361,8 @@ const authCtrl = {
       throw new ValidationError("Password must be at least 8 characters long.");
     }
 
-    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/;
+    const passwordRegex =
+      /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/;
     if (!passwordRegex.test(newPassword)) {
       throw new ValidationError(
         "Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character."
@@ -343,11 +375,13 @@ const authCtrl = {
       { _id: req.user._id },
       {
         password: newPasswordHash,
-        $inc: { tokenVersion: 1 }
+        $inc: { tokenVersion: 1 },
       }
     );
 
-    res.json({ msg: "Password updated successfully. Please login again with your new password." });
+    res.json({
+      msg: "Password updated successfully. Please login again with your new password.",
+    });
   }),
 
   registerAdmin: asyncHandler(async (req, res) => {
@@ -420,9 +454,10 @@ const authCtrl = {
           );
           const daysRemaining = Math.ceil(hoursRemaining / 24);
 
-          errorMessage = hoursRemaining > 48
-            ? `Your account is suspended for ${daysRemaining} more days.`
-            : `Your account is suspended for ${hoursRemaining} more hours.`;
+          errorMessage =
+            hoursRemaining > 48
+              ? `Your account is suspended for ${daysRemaining} more days.`
+              : `Your account is suspended for ${hoursRemaining} more hours.`;
 
           additionalInfo.reason = blockStatus.reason;
           additionalInfo.expiresAt = blockStatus.expiresAt;
@@ -430,12 +465,14 @@ const authCtrl = {
           break;
 
         case "admin_block":
-          errorMessage = "Your account has been suspended. Please contact support for assistance.";
+          errorMessage =
+            "Your account has been suspended. Please contact support for assistance.";
           additionalInfo.reason = blockStatus.reason;
           break;
 
         default:
-          errorMessage = user.blockedReason || "Your account has been suspended.";
+          errorMessage =
+            user.blockedReason || "Your account has been suspended.";
           additionalInfo.reason = user.blockedReason;
       }
 
@@ -459,19 +496,21 @@ const authCtrl = {
       throw new AuthenticationError("Invalid credentials.");
     }
 
-    const populatedUser = await Users.findById(user._id)
-      .populate("followers following", "-password");
+    const populatedUser = await Users.findById(user._id).populate(
+      "followers following",
+      "-password"
+    );
 
     const access_token = createAccessToken({
       id: user._id,
-      version: user.tokenVersion || 0
+      version: user.tokenVersion || 0,
     });
     const refresh_token = createRefreshToken({
       id: user._id,
-      version: user.tokenVersion || 0
+      version: user.tokenVersion || 0,
     });
 
-    await user.updateLastLogin(req.ip, req.headers['user-agent']);
+    await user.updateLastLogin(req.ip, req.headers["user-agent"]);
 
     res.cookie("refreshtoken", refresh_token, {
       httpOnly: true,
@@ -519,14 +558,14 @@ const authCtrl = {
 
     const access_token = createAccessToken({
       id: user._id,
-      version: user.tokenVersion || 0
+      version: user.tokenVersion || 0,
     });
     const refresh_token = createRefreshToken({
       id: user._id,
-      version: user.tokenVersion || 0
+      version: user.tokenVersion || 0,
     });
 
-    await user.updateLastLogin(req.ip, req.headers['user-agent']);
+    await user.updateLastLogin(req.ip, req.headers["user-agent"]);
 
     res.cookie("refreshtoken", refresh_token, {
       httpOnly: true,
@@ -560,10 +599,14 @@ const authCtrl = {
 
     try {
       const result = await new Promise((resolve, reject) => {
-        jwt.verify(rf_token, process.env.REFRESH_TOKEN_SECRET, (err, decoded) => {
-          if (err) reject(err);
-          else resolve(decoded);
-        });
+        jwt.verify(
+          rf_token,
+          process.env.REFRESH_TOKEN_SECRET,
+          (err, decoded) => {
+            if (err) reject(err);
+            else resolve(decoded);
+          }
+        );
       });
 
       const user = await Users.findById(result.id)
@@ -574,14 +617,17 @@ const authCtrl = {
         throw new ValidationError("User does not exist.");
       }
 
-      if (user.tokenVersion !== undefined && result.version !== user.tokenVersion) {
+      if (
+        user.tokenVersion !== undefined &&
+        result.version !== user.tokenVersion
+      ) {
         throw new AuthenticationError("Session expired. Please login again.");
       }
 
       await user.checkAndUnblockIfExpired();
       const blockStatus = user.getBlockStatus();
 
-      if (blockStatus.isBlocked && user.role !== 'admin') {
+      if (blockStatus.isBlocked && user.role !== "admin") {
         return res.status(403).json({
           msg: "Your account has been blocked.",
           isBlocked: true,
@@ -591,10 +637,9 @@ const authCtrl = {
 
       const access_token = createAccessToken({
         id: result.id,
-        version: user.tokenVersion || 0
+        version: user.tokenVersion || 0,
       });
       res.json({ access_token, user });
-
     } catch (err) {
       throw new AuthenticationError("Please login again.");
     }

@@ -165,6 +165,18 @@ app.get("/api", (req, res) => {
     },
   });
 });
+// Root endpoint for health checks (tránh 404 logs từ Render)
+app.get("/", (req, res) => {
+  res.json({
+    message: "Social Media API Server",
+    status: "running",
+    version: "3.0.0",
+    endpoints: {
+      health: "/health",
+      api: "/api"
+    }
+  });
+});
 
 app.use("/api", require("./routes/authRouter"));
 app.use("/api", require("./routes/userRouter"));

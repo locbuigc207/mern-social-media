@@ -8,15 +8,54 @@ const {
   rateLimitByUser,
   validateFileUpload,
 } = require("../middleware/validation");
+const { uploadSingle } = require("../middleware/upload");
 
 const storyRateLimit = rateLimitByUser(30, 60 * 60 * 1000);
 
+// Validation schemas
+const createStorySchema = {
+  caption: {
+    type: "string",
+    maxLength: 500,
+    required: false,
+  },
+  privacy: {
+    type: "string",
+    required: false,
+    custom: (value) => {
+      const validPrivacy = ["public", "friends", "close_friends", "custom"];
+      if (value && !validPrivacy.includes(value)) {
+        return "Invalid privacy setting";
+      }
+    },
+  },
+};
+
+const replySchema = {
+  text: {
+    type: "string",
+    required: true,
+    minLength: 1,
+    maxLength: 500,
+  },
+};
+
+const highlightSchema = {
+  highlightName: {
+    type: "string",
+    required: false,
+    maxLength: 50,
+  },
+};
+
+// Create story
 router.post(
   "/story",
   auth,
   storyRateLimit,
-  validateFileUpload(10 * 1024 * 1024),
-  validate(storySchemas.create),
+  uploadSingle,
+  validateFileUpload(10 * 1024 * 1024), // 10MB max
+  //validateBody(createStorySchema),
   storyCtrl.createStory
 );
 
@@ -71,6 +110,21 @@ router.get(
   auth,
   validateObjectId("storyId"),
   storyCtrl.getStoryViews
+);
+// Like/Unlike story
+router.post(
+  "/story/:storyId/like",
+  auth,
+  validateObjectId("storyId"),
+  storyCtrl.likeStory
+);
+
+// Get story likes (owner only)
+router.get(
+  "/story/:storyId/likes",
+  auth,
+  validateObjectId("storyId"),
+  storyCtrl.getStoryLikes
 );
 
 module.exports = router;

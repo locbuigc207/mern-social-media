@@ -44,7 +44,20 @@ const uploadFields = upload.fields([
   { name: "coverPhoto", maxCount: 1 },
 ]);
 router.get("/user/me", auth, userCtrl.getCurrentUser);
-router.get("/user/friends", auth, userCtrl.getFriends);
+router.get("/user/following", auth, userCtrl.getFollowing);
+router.get("/user/followers", auth, userCtrl.getFollowers);
+router.get(
+  "/user/:id/following",
+  auth,
+  validateObjectId("id"),
+  userCtrl.getFollowing
+);
+router.get(
+  "/user/:id/followers",
+  auth,
+  validateObjectId("id"),
+  userCtrl.getFollowers
+);
 router.get("/search", auth, searchLimiter, userCtrl.searchUser);
 router.get("/suggestionsUser", auth, userCtrl.suggestionsUser);
 router.get("/user/:id", auth, validateObjectId("id"), userCtrl.getUser);
@@ -62,6 +75,12 @@ router.patch(
   auth,
   validate(userSchemas.updatePrivacy),
   userCtrl.updatePrivacySettings
+);
+router.post(
+  "/user/:id/block",
+  auth,
+  validateObjectId("id"),
+  userCtrl.blockUser
 );
 
 router.delete(

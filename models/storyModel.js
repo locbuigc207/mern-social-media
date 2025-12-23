@@ -38,6 +38,18 @@ const storySchema = new Schema(
         },
       },
     ],
+    likes: [
+  {
+    user: {
+      type: mongoose.Types.ObjectId,
+      ref: "user",
+    },
+    likedAt: {
+      type: Date,
+      default: Date.now,
+    },
+  },
+],
     replies: [
       {
         user: {
@@ -54,6 +66,11 @@ const storySchema = new Schema(
         },
       },
     ],
+    storyReply: {
+    type: mongoose.Types.ObjectId,
+    ref: "story",
+    default: null
+  },
     isHighlight: {
       type: Boolean,
       default: false,
@@ -79,7 +96,6 @@ const storySchema = new Schema(
     expiresAt: {
       type: Date,
       required: true,
-      index: true,
     },
     isActive: {
       type: Boolean,

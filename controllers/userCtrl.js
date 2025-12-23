@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const Users = require("../models/userModel");
 const Conversations = require("../models/conversationModel");
 const Messages = require("../models/messageModel");
@@ -9,6 +10,7 @@ const {
   ConflictError,
 } = require("../utils/AppError");
 const notificationService = require("../services/notificationService");
+const { uploadToCloudinary, deleteFromCloudinary } = require("../services/cloudinaryService");
 
 const userCtrl = {
   searchUser: asyncHandler(async (req, res) => {
@@ -151,50 +153,84 @@ const userCtrl = {
   }),
 
   updateUser: asyncHandler(async (req, res) => {
-    try {
-      const { fullname, bio, location, mobile, address, website, gender } =
-        req.body;
+  try {
+    const { fullname, bio, location, mobile, address, website, gender } = req.body;
 
-      if (!fullname) {
-        return res.status(400).json({ msg: "Please add your full name." });
-      }
-
-      const updateData = {
-        fullname: fullname,
-        bio: bio || "",
-        location: location || "",
-        mobile: mobile || "",
-        address: address || "",
-        website: website || "",
-        gender: gender || "male",
-      };
-
-      if (req.files) {
-        const port = process.env.PORT || 4000;
-        const baseUrl = `http://localhost:${port}/uploads`;
-
-        if (req.files.avatar && req.files.avatar[0]) {
-          updateData.avatar = `${baseUrl}/${req.files.avatar[0].filename}`;
-        }
-
-        if (req.files.coverPhoto && req.files.coverPhoto[0]) {
-          updateData.coverPhoto = `${baseUrl}/${req.files.coverPhoto[0].filename}`;
-        }
-      }
-
-      const user = await Users.findByIdAndUpdate(req.user._id, updateData, {
-        new: true,
-      }).select("-password");
-
-      res.json({
-        msg: "Profile updated successfully.",
-        user,
-      });
-    } catch (err) {
-      console.error(" Update user error:", err);
-      return res.status(500).json({ msg: err.message });
+    if (!fullname) {
+      return res.status(400).json({ msg: "Please add your full name." });
     }
-  }),
+
+    const updateData = {
+      fullname: fullname,
+      bio: bio || "",
+      location: location || "",
+      mobile: mobile || "",
+      address: address || "",
+      website: website || "",
+      gender: gender || "male",
+    };
+
+    // Lấy user hiện tại để xóa ảnh cũ trên Cloudinary
+    const currentUser = await Users.findById(req.user._id);
+
+    // Upload avatar lên Cloudinary
+    if (req.files && req.files.avatar && req.files.avatar[0]) {
+      try {
+        // Xóa avatar cũ nếu có
+        if (currentUser.avatar && currentUser.avatar.includes('cloudinary')) {
+          const oldPublicId = currentUser.avatar.split('/').pop().split('.')[0];
+          const folderPath = currentUser.avatar.split('/').slice(-2, -1)[0];
+          await deleteFromCloudinary(`${folderPath}/${oldPublicId}`);
+        }
+
+        // Upload avatar mới
+        const avatarResult = await uploadToCloudinary(
+          req.files.avatar[0].path,
+          { folder: 'campus-connect/avatars', resourceType: 'image' }
+        );
+        updateData.avatar = avatarResult.url;
+      } catch (err) {
+        console.error("Avatar upload error:", err);
+        return res.status(500).json({ msg: "Failed to upload avatar" });
+      }
+    }
+
+    // Upload cover photo lên Cloudinary
+    if (req.files && req.files.coverPhoto && req.files.coverPhoto[0]) {
+      try {
+        // Xóa cover cũ nếu có
+        if (currentUser.coverPhoto && currentUser.coverPhoto.includes('cloudinary')) {
+          const oldPublicId = currentUser.coverPhoto.split('/').pop().split('.')[0];
+          const folderPath = currentUser.coverPhoto.split('/').slice(-2, -1)[0];
+          await deleteFromCloudinary(`${folderPath}/${oldPublicId}`);
+        }
+
+        // Upload cover mới
+        const coverResult = await uploadToCloudinary(
+          req.files.coverPhoto[0].path,
+          { folder: 'campus-connect/covers', resourceType: 'image' }
+        );
+        updateData.coverPhoto = coverResult.url;
+      } catch (err) {
+        console.error("Cover photo upload error:", err);
+        return res.status(500).json({ msg: "Failed to upload cover photo" });
+      }
+    }
+
+    // Cập nhật user
+    const user = await Users.findByIdAndUpdate(req.user._id, updateData, {
+      new: true,
+    }).select("-password");
+
+    res.json({
+      msg: "Profile updated successfully.",
+      user,
+    });
+  } catch (err) {
+    console.error("Update user error:", err);
+    return res.status(500).json({ msg: err.message });
+  }
+}),
 
   updatePrivacySettings: asyncHandler(async (req, res) => {
     const {
@@ -349,46 +385,49 @@ const userCtrl = {
       isBlockedBy: isBlockedByThem,
     });
   }),
-
+  //!-----------------------------------------------------------
+  //!---------------------------- FOLLOW -----------------------
+  //!-----------------------------------------------------------
+  // 1. Follow User
   follow: asyncHandler(async (req, res) => {
-    const targetUser = await Users.findById(req.params.id);
+    const targetUserId = req.params.id;
+    const currentUserId = req.user._id;
 
-    if (!targetUser) {
-      throw new NotFoundError("User");
-    }
+    // Kiểm tra user tồn tại
+    const targetUser = await Users.findById(targetUserId);
+    if (!targetUser) throw new NotFoundError("User not found");
 
-    const currentUser = await Users.findById(req.user._id).select(
+    // Kiểm tra block
+    const currentUser = await Users.findById(currentUserId).select(
       "blockedUsers blockedBy following"
     );
-
     if (
-      currentUser.blockedBy.includes(req.params.id) ||
-      currentUser.blockedUsers.includes(req.params.id)
+      currentUser.blockedBy.includes(targetUserId) ||
+      currentUser.blockedUsers.includes(targetUserId)
     ) {
       return res.status(403).json({ msg: "You cannot follow this user." });
     }
 
-    if (currentUser.following.includes(req.params.id)) {
+    // Kiểm tra đã follow chưa
+    if (currentUser.following.includes(targetUserId)) {
       throw new ConflictError("You are already following this user.");
     }
 
-    const session = await require("mongoose").startSession();
+    const session = await mongoose.startSession();
     session.startTransaction();
 
     try {
-      const newUser = await Users.findOneAndUpdate(
-        { _id: req.params.id },
-        {
-          $addToSet: {
-            followers: req.user._id,
-          },
-        },
+      // Cập nhật người được follow (Thêm vào danh sách followers)
+      const updatedTargetUser = await Users.findOneAndUpdate(
+        { _id: targetUserId },
+        { $addToSet: { followers: currentUserId } },
         { new: true, session }
       ).populate("followers following", "-password");
 
+      // Cập nhật người đi follow (Thêm vào danh sách following)
       await Users.findOneAndUpdate(
-        { _id: req.user._id },
-        { $addToSet: { following: req.params.id } },
+        { _id: currentUserId },
+        { $addToSet: { following: targetUserId } },
         { new: true, session }
       );
 
@@ -396,7 +435,7 @@ const userCtrl = {
       await notificationService.notifyFollow(targetUser, req.user);
 
       await session.commitTransaction();
-      res.json({ newUser });
+      res.json({ newUser: updatedTargetUser });
     } catch (error) {
       await session.abortTransaction();
       throw error;
@@ -405,33 +444,45 @@ const userCtrl = {
     }
   }),
 
+  // 2. Unfollow User
   unfollow: asyncHandler(async (req, res) => {
-    const currentUser = await Users.findById(req.user._id).select("following");
+    const targetUserId = req.params.id;
+    const currentUserId = req.user._id;
 
-    if (!currentUser.following.includes(req.params.id)) {
+    const currentUser = await Users.findById(currentUserId).select("following");
+    if (!currentUser.following.includes(targetUserId)) {
       throw new ValidationError("You are not following this user.");
     }
 
-    const session = await require("mongoose").startSession();
+    const session = await mongoose.startSession();
     session.startTransaction();
 
     try {
-      const newUser = await Users.findOneAndUpdate(
-        { _id: req.params.id },
-        {
-          $pull: { followers: req.user._id },
-        },
+      // Cập nhật người bị unfollow
+      const updatedTargetUser = await Users.findOneAndUpdate(
+        { _id: targetUserId },
+        { $pull: { followers: currentUserId } },
         { new: true, session }
       ).populate("followers following", "-password");
 
+      // Cập nhật người đi unfollow
       await Users.findOneAndUpdate(
-        { _id: req.user._id },
-        { $pull: { following: req.params.id } },
+        { _id: currentUserId },
+        { $pull: { following: targetUserId } },
         { new: true, session }
       );
 
+      // Xóa thông báo follow trước đó (nếu có) để sạch DB
+      // (Optional: Tùy logic bạn muốn giữ lịch sử hay không)
+      /* await Notifies.findOneAndDelete({
+          user: currentUserId,
+          recipients: targetUserId,
+          text: "started following you."
+      }).session(session);
+      */
+
       await session.commitTransaction();
-      res.json({ newUser });
+      res.json({ newUser: updatedTargetUser });
     } catch (error) {
       await session.abortTransaction();
       throw error;
@@ -440,12 +491,41 @@ const userCtrl = {
     }
   }),
 
-  suggestionsUser: asyncHandler(async (req, res) => {
-    const currentUser = await Users.findById(req.user._id)
-      .select("following blockedUsers blockedBy")
-      .lean();
+  // 3. Lấy danh sách đang theo dõi
+  getFollowing: asyncHandler(async (req, res) => {
+    // Nếu có userId trên params thì lấy của user đó, không thì lấy của chính mình
+    const userId = req.params.id || req.user._id;
 
-    const newArr = [
+    const user = await Users.findById(userId)
+      .populate("following", "fullname username avatar followers")
+      .select("following");
+
+    if (!user) throw new NotFoundError("User not found");
+
+    // Trả về danh sách following
+    res.json({ following: user.following });
+  }),
+
+  // 4. Lấy danh sách người theo dõi (Followers)
+  getFollowers: asyncHandler(async (req, res) => {
+    const userId = req.params.id || req.user._id;
+
+    const user = await Users.findById(userId)
+      .populate("followers", "fullname username avatar following")
+      .select("followers");
+
+    if (!user) throw new NotFoundError("User not found");
+
+    res.json({ followers: user.followers });
+  }),
+
+  // 5. Gợi ý User (Suggestions) - Giữ nguyên logic cũ
+  suggestionsUser: asyncHandler(async (req, res) => {
+    const currentUser = await Users.findById(req.user._id).select(
+      "following blockedUsers blockedBy"
+    );
+
+    const excludeIds = [
       ...currentUser.following,
       req.user._id,
       ...currentUser.blockedUsers,
@@ -457,34 +537,20 @@ const userCtrl = {
     const users = await Users.aggregate([
       {
         $match: {
-          _id: { $nin: newArr },
+          _id: { $nin: excludeIds },
           role: "user",
           isBlocked: false,
         },
       },
       { $sample: { size: Number(num) } },
       {
-        $lookup: {
-          from: "users",
-          localField: "followers",
-          foreignField: "_id",
-          as: "followers",
-        },
-      },
-      {
-        $lookup: {
-          from: "users",
-          localField: "following",
-          foreignField: "_id",
-          as: "following",
-        },
-      },
-      {
         $project: {
           password: 0,
           resetPasswordToken: 0,
           verificationToken: 0,
           previousResetTokens: 0,
+          email: 0,
+          role: 0,
         },
       },
     ]);
@@ -543,7 +609,8 @@ const userCtrl = {
       );
 
       let autoBlocked = false;
-      let actionMessage = "Report submitted successfully. We will review it within 24 hours.";
+      let actionMessage =
+        "Report submitted successfully. We will review it within 24 hours.";
 
       const pendingReportsCount = await Reports.countDocuments({
         targetId: id,
@@ -551,7 +618,12 @@ const userCtrl = {
         status: "pending",
       }).session(session);
 
-      const criticalReasons = ["child_exploitation", "terrorism", "self_harm", "threats"];
+      const criticalReasons = [
+        "child_exploitation",
+        "terrorism",
+        "self_harm",
+        "threats",
+      ];
       const highReasons = ["violence", "harassment", "hate_speech"];
 
       let shouldAutoBlock = false;
@@ -599,10 +671,13 @@ const userCtrl = {
             actionTaken: "account_suspended",
             blockedAt: updatedUser.blockedAt,
             expiresAt: updatedUser.suspendedUntil,
-            message: "Your account has been temporarily suspended due to multiple reports.",
+            message:
+              "Your account has been temporarily suspended due to multiple reports.",
           });
 
-          const sockets = await io.in(updatedUser._id.toString()).fetchSockets();
+          const sockets = await io
+            .in(updatedUser._id.toString())
+            .fetchSockets();
           for (const socket of sockets) {
             socket.emit("forceLogout", {
               reason: "account_suspended",
@@ -635,18 +710,6 @@ const userCtrl = {
     } finally {
       session.endSession();
     }
-  }),
-
-  getFriends: asyncHandler(async (req, res) => {
-    const user = await Users.findById(req.user._id)
-      .populate("following", "fullname username avatar")
-      .select("following");
-
-    if (!user) {
-      throw new NotFoundError("User");
-    }
-
-    res.json({ friends: user.following });
   }),
 };
 

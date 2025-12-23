@@ -599,21 +599,38 @@ const postCtrl = {
   }),
 
   getUserPosts: asyncHandler(async (req, res) => {
-    const features = new APIfeatures(
-      Posts.find({
-        user: req.params.id,
-        status: "published",
-        isDraft: false,
-      }),
-      req.query
-    ).paginating();
-    const posts = await features.query.sort("-createdAt");
+  const features = new APIfeatures(
+    Posts.find({
+      user: req.params.id,
+      status: "published",
+      isDraft: false,
+    }),
+    req.query
+  ).paginating();
 
-    res.json({
-      posts,
-      result: posts.length,
+  const posts = await features.query
+    .sort("-createdAt")
+    .populate("user", "avatar username fullname")
+    .populate({
+      path: "comments",
+      populate: {
+        path: "user",
+        select: "avatar username fullname"
+      }
+    })
+    .populate({
+      path: "originalPost",
+      populate: {
+        path: "user",
+        select: "avatar username fullname"
+      }
     });
-  }),
+
+  res.json({
+    posts,
+    result: posts.length,
+  });
+}),
 
   getPost: asyncHandler(async (req, res) => {
     const post = await Posts.findById(req.params.id)
