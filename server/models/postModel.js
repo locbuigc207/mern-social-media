@@ -1,3 +1,4 @@
+// server/models/postModel.js - COMPLETE VERSION
 const mongoose = require("mongoose");
 const { Schema } = mongoose;
 
@@ -26,7 +27,7 @@ const postSchema = new Schema(
       required: true,
       index: true,
     },
-    
+    // Sharing
     isShared: {
       type: Boolean,
       default: false,
@@ -44,7 +45,7 @@ const postSchema = new Schema(
     shares: [
       {
         type: mongoose.Types.ObjectId,
-        ref: "post", 
+        ref: "post",
       },
     ],
     shareCount: {
@@ -52,7 +53,7 @@ const postSchema = new Schema(
       default: 0,
       index: true,
     },
-    
+    // Reporting
     reports: [
       {
         type: mongoose.Types.ObjectId,
@@ -76,6 +77,7 @@ const postSchema = new Schema(
       },
     ],
     hiddenReason: String,
+    // Status
     status: {
       type: String,
       enum: ["published", "draft", "scheduled", "removed"],
@@ -95,6 +97,7 @@ const postSchema = new Schema(
       default: false,
       index: true,
     },
+    // Moderation
     moderationStatus: {
       type: String,
       enum: ["approved", "flagged", "under_review", "removed"],
@@ -107,12 +110,45 @@ const postSchema = new Schema(
     },
     moderatedAt: Date,
     moderationNote: String,
+    // Edit history
+    editHistory: [
+      {
+        content: String,
+        images: Array,
+        editedAt: {
+          type: Date,
+          default: Date.now,
+        },
+        editedBy: {
+          type: mongoose.Types.ObjectId,
+          ref: "user",
+        },
+      },
+    ],
+    isEdited: {
+      type: Boolean,
+      default: false,
+    },
+    lastEditedAt: Date,
+    // Location
+    location: {
+      type: {
+        type: String,
+        enum: ["Point"],
+      },
+      coordinates: {
+        type: [Number], // [longitude, latitude]
+      },
+      name: String,
+      address: String,
+    },
   },
   {
     timestamps: true,
   }
 );
 
+// Indexes
 postSchema.index({ user: 1, createdAt: -1 });
 postSchema.index({ status: 1, isDraft: 1 });
 postSchema.index({ status: 1, scheduledDate: 1 });
@@ -125,13 +161,15 @@ postSchema.index({ user: 1, status: 1, isDraft: 1, moderationStatus: 1 });
 postSchema.index({ likes: 1 });
 postSchema.index({ status: 1, isDraft: 1, moderationStatus: 1, createdAt: -1 });
 postSchema.index({ content: "text" });
-
 postSchema.index({ isShared: 1, originalPost: 1 });
 postSchema.index({ shareCount: -1 });
 postSchema.index({ originalPost: 1, user: 1 }, { 
   partialFilterExpression: { isShared: true } 
 });
+postSchema.index({ "location.coordinates": "2dsphere" });
+postSchema.index({ isEdited: 1, lastEditedAt: -1 });
 
+// Methods
 postSchema.methods.incrementReportCount = function () {
   this.reportCount += 1;
   if (this.reportCount >= 5) {
@@ -185,6 +223,7 @@ postSchema.methods.canBeShared = function () {
   );
 };
 
+// Pre-save hook
 postSchema.pre("save", function (next) {
   if (
     this.isModified("status") &&
@@ -196,6 +235,7 @@ postSchema.pre("save", function (next) {
   next();
 });
 
+// Static methods
 postSchema.statics.getMostShared = function (limit = 10, timeRange = null) {
   const query = {
     status: "published",

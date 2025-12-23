@@ -165,7 +165,7 @@ app.get("/api", (req, res) => {
     },
   });
 });
-// Root endpoint for health checks (tránh 404 logs từ Render)
+
 app.get("/", (req, res) => {
   res.json({
     message: "Social Media API Server",
@@ -178,6 +178,7 @@ app.get("/", (req, res) => {
   });
 });
 
+// Routes
 app.use("/api", require("./routes/authRouter"));
 app.use("/api", require("./routes/userRouter"));
 app.use("/api", require("./routes/postRouter"));
@@ -188,6 +189,44 @@ app.use("/api", require("./routes/adminRouter"));
 app.use("/api", require("./routes/storyRouter"));
 app.use("/api", require("./routes/groupRouter"));
 app.use("/api", require("./routes/hashtagRouter"));
+app.use("/api", require("./routes/friendRouter"));
+app.use("/api", require("./routes/collectionRouter"));
+app.use("/api", require("./routes/searchRouter"));
+app.use("/api", require("./routes/settingsRouter"));
+app.use("/api", require("./routes/profileRouter"));
+app.use("/api", require("./routes/discoveryRouter"));
+app.use("/api", require("./routes/analyticsRouter"));
+
+// Location routes
+const locationRouter = require("express").Router();
+const locationCtrl = require("./controllers/locationCtrl");
+const { auth } = require("./middleware/auth");
+const { searchLimiter } = require("./middleware/rateLimiter");
+const { validatePagination } = require("./middleware/validation");
+
+locationRouter.get(
+  "/location/nearby/posts",
+  auth,
+  searchLimiter,
+  validatePagination,
+  locationCtrl.getNearbyPosts
+);
+
+locationRouter.get(
+  "/location/nearby/users",
+  auth,
+  searchLimiter,
+  locationCtrl.getNearbyUsers
+);
+
+locationRouter.get(
+  "/location/posts",
+  auth,
+  validatePagination,
+  locationCtrl.getPostsByLocation
+);
+
+app.use("/api", locationRouter);
 
 app.use(notFound);
 app.use(errorHandler);
@@ -408,13 +447,6 @@ process.on("unhandledRejection", (reason, promise) => {
   logger.error("Unhandled Rejection at:", promise, "reason:", reason);
   shutdown("unhandledRejection");
 });
-
-// const SHUTDOWN_TIMEOUT = parseInt(process.env.SHUTDOWN_TIMEOUT) || 30000;
-// const forceShutdownTimer = setTimeout(() => {
-//   logger.error(`Forced shutdown after ${SHUTDOWN_TIMEOUT}ms timeout`);
-//   process.exit(1);
-// }, SHUTDOWN_TIMEOUT);
-// forceShutdownTimer.unref();
 
 startServer();
 

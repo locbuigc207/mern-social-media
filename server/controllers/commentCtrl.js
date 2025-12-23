@@ -10,81 +10,81 @@ const { REPORT_REASONS, REPORT_PRIORITY } = require("../constants");
 
 const commentCtrl = {
   createComment: asyncHandler(async (req, res) => {
-  const { postId, content, tag, reply, postUserId } = req.body;
+    const { postId, content, tag, reply, postUserId } = req.body;
 
-  const post = await Posts.findById(postId).populate(
-    "user",
-    "username avatar fullname"
-  );
-  if (!post) {
-    throw new NotFoundError("Post");
-  }
-
-  let originalComment = null;
-  if (reply) {
-    originalComment = await Comments.findById(reply).populate(
+    const post = await Posts.findById(postId).populate(
       "user",
       "username avatar fullname"
     );
-    if (!originalComment) {
-      throw new NotFoundError("Comment");
+    if (!post) {
+      throw new NotFoundError("Post");
     }
-  }
 
-  const newComment = new Comments({
-    user: req.user._id,
-    content,
-    tag,
-    reply,
-    postUserId,
-    postId,
-  });
-
-  await newComment.save();
-
-  await Posts.findOneAndUpdate(
-    { _id: postId },
-    {
-      $push: { comments: newComment._id },
-    },
-    { new: true }
-  );
-
-  if (reply && originalComment) {
-    await notificationService.notifyReplyComment(
-      post,
-      originalComment,
-      newComment,
-      req.user
-    );
-  } else {
-    await notificationService.notifyComment(post, newComment, req.user);
-  }
-
-  const mentionRegex = /@(\w+)/g;
-  const mentions = content.match(mentionRegex);
-  if (mentions) {
-    const Users = require("../models/userModel");
-    const usernames = mentions.map((m) => m.slice(1));
-    const mentionedUsers = await Users.find({
-      username: { $in: usernames },
-    }).select("_id");
-
-    if (mentionedUsers.length > 0) {
-      await notificationService.notifyMention(
-        mentionedUsers.map((u) => u._id),
-        req.user,
-        post,
-        newComment
+    let originalComment = null;
+    if (reply) {
+      originalComment = await Comments.findById(reply).populate(
+        "user",
+        "username avatar fullname"
       );
+      if (!originalComment) {
+        throw new NotFoundError("Comment");
+      }
     }
-  }
 
-  // POPULATE user trước khi trả về
-  await newComment.populate("user", "avatar username fullname");
+    const newComment = new Comments({
+      user: req.user._id,
+      content,
+      tag,
+      reply,
+      postUserId,
+      postId,
+    });
 
-  res.json({ newComment });
-}),
+    await newComment.save();
+
+    await Posts.findOneAndUpdate(
+      { _id: postId },
+      {
+        $push: { comments: newComment._id },
+      },
+      { new: true }
+    );
+
+    if (reply && originalComment) {
+      await notificationService.notifyReplyComment(
+        post,
+        originalComment,
+        newComment,
+        req.user
+      );
+    } else {
+      await notificationService.notifyComment(post, newComment, req.user);
+    }
+
+    const mentionRegex = /@(\w+)/g;
+    const mentions = content.match(mentionRegex);
+    if (mentions) {
+      const Users = require("../models/userModel");
+      const usernames = mentions.map((m) => m.slice(1));
+      const mentionedUsers = await Users.find({
+        username: { $in: usernames },
+      }).select("_id");
+
+      if (mentionedUsers.length > 0) {
+        await notificationService.notifyMention(
+          mentionedUsers.map((u) => u._id),
+          req.user,
+          post,
+          newComment
+        );
+      }
+    }
+
+    // POPULATE user trước khi trả về
+    await newComment.populate("user", "avatar username fullname");
+
+    res.json({ newComment });
+  }),
 
   updateComment: asyncHandler(async (req, res) => {
     const { content } = req.body;
@@ -319,4 +319,44 @@ const commentCtrl = {
   }),
 };
 
-module.exports = commentCtrl;
+const getCommentReplies = asyncHandler(async (req, res) => {
+  const { commentId } = req.params;
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 10;
+  const skip = (page - 1) * limit;
+
+  const parentComment = await Comments.findById(commentId);
+  if (!parentComment) {
+    throw new NotFoundError("Comment");
+  }
+
+  const replies = await Comments.find({
+    reply: commentId,
+    moderationStatus: { $ne: "removed" },
+  })
+    .populate("user", "avatar username fullname")
+    .sort("createdAt")
+    .skip(skip)
+    .limit(limit);
+
+  const total = await Comments.countDocuments({
+    reply: commentId,
+    moderationStatus: { $ne: "removed" },
+  });
+
+  res.json({
+    replies,
+    total,
+    page,
+    totalPages: Math.ceil(total / limit),
+    parentComment: {
+      _id: parentComment._id,
+      content: parentComment.content,
+    },
+  });
+});
+
+module.exports = {
+  ...commentCtrl,
+  getCommentReplies,
+};

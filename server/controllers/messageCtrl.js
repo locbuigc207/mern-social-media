@@ -19,114 +19,113 @@ class APIfeatures {
 }
 
 const messageCtrl = {
-  
-createMessage: async (req, res) => {
-  try {
-    const { recipient, text } = req.body;
+  createMessage: async (req, res) => {
+    try {
+      const { recipient, text } = req.body;
 
-    // KHÔNG CHO GỬI TIN NHẮN CHO CHÍNH MÌNH
-    if (recipient === req.user._id.toString()) {
-      return res.status(400).json({ msg: "Bạn không thể gửi tin nhắn cho chính mình." });
-    }
-
-    // Upload ảnh lên Cloudinary
-    let media = [];
-    if (req.files && req.files.length > 0) {
-      try {
-        console.log(`Uploading ${req.files.length} files to Cloudinary...`);
-        
-        const filePaths = req.files.map(file => file.path);
-        
-        const uploadResult = await uploadMultipleToCloudinary(
-          filePaths,
-          { folder: 'campus-connect/messages', resourceType: 'auto' }
-        );
-
-        if (!uploadResult.success && uploadResult.errors.length > 0) {
-          console.error('Some files failed to upload:', uploadResult.errors);
-        }
-
-        media = uploadResult.results.map(result => ({
-          url: result.url,
-          publicId: result.publicId,
-          type: result.type === 'video' ? 'video' : 'image',
-        }));
-
-        console.log(`Successfully uploaded ${media.length} files to Cloudinary`);
-      } catch (uploadErr) {
-        console.error("Chat media upload error:", uploadErr);
-        return res.status(500).json({ msg: "Failed to upload media" });
+      // KHÔNG CHO GỬI TIN NHẮN CHO CHÍNH MÌNH
+      if (recipient === req.user._id.toString()) {
+        return res.status(400).json({ msg: "Bạn không thể gửi tin nhắn cho chính mình." });
       }
-    }
 
-    // Validate: must have text or media
-    if (!recipient || (!text?.trim() && media.length === 0)) {
-      return res.status(400).json({ msg: "Message content is required" });
-    }
+      // Upload ảnh lên Cloudinary
+      let media = [];
+      if (req.files && req.files.length > 0) {
+        try {
+          console.log(`Uploading ${req.files.length} files to Cloudinary...`);
+          
+          const filePaths = req.files.map(file => file.path);
+          
+          const uploadResult = await uploadMultipleToCloudinary(
+            filePaths,
+            { folder: 'campus-connect/messages', resourceType: 'auto' }
+          );
 
-    const recipientUser = await Users.findById(recipient);
+          if (!uploadResult.success && uploadResult.errors.length > 0) {
+            console.error('Some files failed to upload:', uploadResult.errors);
+          }
 
-    if (!recipientUser) {
-      return res.status(404).json({ msg: "Recipient not found" });
-    }
+          media = uploadResult.results.map(result => ({
+            url: result.url,
+            publicId: result.publicId,
+            type: result.type === 'video' ? 'video' : 'image',
+          }));
 
-    if (recipientUser.blockedUsers.includes(req.user._id)) {
-      return res
-        .status(403)
-        .json({ msg: "You cannot send messages to this user." });
-    }
+          console.log(`Successfully uploaded ${media.length} files to Cloudinary`);
+        } catch (uploadErr) {
+          console.error("Chat media upload error:", uploadErr);
+          return res.status(500).json({ msg: "Failed to upload media" });
+        }
+      }
 
-    if (recipientUser.blockedBy && recipientUser.blockedBy.includes(req.user._id)) {
-      return res.status(403).json({ msg: "You are blocked by this user." });
-    }
+      // Validate: must have text or media
+      if (!recipient || (!text?.trim() && media.length === 0)) {
+        return res.status(400).json({ msg: "Message content is required" });
+      }
 
-    if (recipientUser.privacySettings.whoCanMessage === "none") {
-      return res
-        .status(403)
-        .json({ msg: "This user doesn't accept messages." });
-    }
+      const recipientUser = await Users.findById(recipient);
 
-    if (recipientUser.privacySettings.whoCanMessage === "following") {
-      if (!recipientUser.followers.includes(req.user._id)) {
+      if (!recipientUser) {
+        return res.status(404).json({ msg: "Recipient not found" });
+      }
+
+      if (recipientUser.blockedUsers.includes(req.user._id)) {
         return res
           .status(403)
-          .json({
-            msg: "You must be followed by this user to send messages.",
-          });
+          .json({ msg: "You cannot send messages to this user." });
       }
-    }
 
-    const newConversation = await Conversations.findOneAndUpdate(
-      {
-        $or: [
-          { recipients: [req.user._id, recipient] },
-          { recipients: [recipient, req.user._id] },
-        ],
-      },
-      {
-        recipients: [req.user._id, recipient],
+      if (recipientUser.blockedBy && recipientUser.blockedBy.includes(req.user._id)) {
+        return res.status(403).json({ msg: "You are blocked by this user." });
+      }
+
+      if (recipientUser.privacySettings.whoCanMessage === "none") {
+        return res
+          .status(403)
+          .json({ msg: "This user doesn't accept messages." });
+      }
+
+      if (recipientUser.privacySettings.whoCanMessage === "following") {
+        if (!recipientUser.followers.includes(req.user._id)) {
+          return res
+            .status(403)
+            .json({
+              msg: "You must be followed by this user to send messages.",
+            });
+        }
+      }
+
+      const newConversation = await Conversations.findOneAndUpdate(
+        {
+          $or: [
+            { recipients: [req.user._id, recipient] },
+            { recipients: [recipient, req.user._id] },
+          ],
+        },
+        {
+          recipients: [req.user._id, recipient],
+          text: text || "",
+          media,
+        },
+        { new: true, upsert: true }
+      );
+
+      const newMessage = new Messages({
+        conversation: newConversation._id,
+        sender: req.user._id,
+        recipient,
         text: text || "",
         media,
-      },
-      { new: true, upsert: true }
-    );
+      });
 
-    const newMessage = new Messages({
-      conversation: newConversation._id,
-      sender: req.user._id,
-      recipient,
-      text: text || "",
-      media,
-    });
+      await newMessage.save();
 
-    await newMessage.save();
-
-    res.json({ msg: "Created.", message: newMessage });
-  } catch (err) {
-    console.error("Create message error:", err);
-    return res.status(500).json({ msg: err.message });
-  }
-},
+      res.json({ msg: "Created.", message: newMessage });
+    } catch (err) {
+      console.error("Create message error:", err);
+      return res.status(500).json({ msg: err.message });
+    }
+  },
 
   getConversations: async (req, res) => {
     try {
@@ -337,6 +336,7 @@ createMessage: async (req, res) => {
       return res.status(500).json({ msg: err.message });
     }
   },
+
   createMessageFromStoryReply: async (req, res) => {
     try {
       const { recipient, text, storyId } = req.body;
@@ -397,18 +397,173 @@ createMessage: async (req, res) => {
       return res.status(500).json({ msg: err.message });
     }
   },
-  searchMessages: async (req, res) => {
-  res.json({ msg: "searchMessages not implemented yet" });
-},
 
-reactToMessage: async (req, res) => {
-  res.json({ msg: "reactToMessage not implemented yet" });
-},
+  reactToMessage: asyncHandler(async (req, res) => {
+    const { messageId } = req.params;
+    const { emoji } = req.body;
 
-removeReaction: async (req, res) => {
-  res.json({ msg: "removeReaction not implemented yet" });
-},
+    if (!emoji || emoji.trim().length === 0) {
+      throw new ValidationError("Emoji is required.");
+    }
 
+    const message = await Messages.findById(messageId);
+
+    if (!message) {
+      throw new NotFoundError("Message");
+    }
+
+    // Check if user is sender or recipient
+    if (
+      message.sender.toString() !== req.user._id.toString() &&
+      message.recipient.toString() !== req.user._id.toString()
+    ) {
+      throw new AuthorizationError("Unauthorized.");
+    }
+
+    // Check if already reacted
+    const existingReaction = message.reactions.findIndex(
+      (r) => r.user.toString() === req.user._id.toString()
+    );
+
+    if (existingReaction !== -1) {
+      // Update existing reaction
+      message.reactions[existingReaction].emoji = emoji;
+      message.reactions[existingReaction].createdAt = new Date();
+    } else {
+      // Add new reaction
+      message.reactions.push({
+        user: req.user._id,
+        emoji: emoji.trim(),
+        createdAt: new Date(),
+      });
+    }
+
+    await message.save();
+
+    // Emit socket event
+    const io = require("../socketServer");
+    if (io) {
+      const recipientId =
+        message.sender.toString() === req.user._id.toString()
+          ? message.recipient
+          : message.sender;
+
+      io.to(recipientId.toString()).emit("messageReaction", {
+        messageId: message._id,
+        userId: req.user._id,
+        emoji,
+        timestamp: new Date(),
+      });
+    }
+
+    logger.info("Message reaction added", {
+      messageId,
+      userId: req.user._id,
+      emoji,
+    });
+
+    res.json({
+      msg: "Reaction added successfully.",
+      reactions: message.reactions,
+    });
+  }),
+
+  removeReaction: asyncHandler(async (req, res) => {
+    const { messageId } = req.params;
+
+    const message = await Messages.findById(messageId);
+
+    if (!message) {
+      throw new NotFoundError("Message");
+    }
+
+    // Check if user is sender or recipient
+    if (
+      message.sender.toString() !== req.user._id.toString() &&
+      message.recipient.toString() !== req.user._id.toString()
+    ) {
+      throw new AuthorizationError("Unauthorized.");
+    }
+
+    message.reactions = message.reactions.filter(
+      (r) => r.user.toString() !== req.user._id.toString()
+    );
+
+    await message.save();
+
+    // Emit socket event
+    const io = require("../socketServer");
+    if (io) {
+      const recipientId =
+        message.sender.toString() === req.user._id.toString()
+          ? message.recipient
+          : message.sender;
+
+      io.to(recipientId.toString()).emit("messageReactionRemoved", {
+        messageId: message._id,
+        userId: req.user._id,
+        timestamp: new Date(),
+      });
+    }
+
+    logger.info("Message reaction removed", {
+      messageId,
+      userId: req.user._id,
+    });
+
+    res.json({
+      msg: "Reaction removed successfully.",
+      reactions: message.reactions,
+    });
+  }),
+
+  searchMessages: asyncHandler(async (req, res) => {
+    const { query, conversationId } = req.query;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    if (!query || query.trim().length < 2) {
+      throw new ValidationError("Search query must be at least 2 characters.");
+    }
+
+    const sanitizedQuery = query.trim().replace(/[$.]/g, "");
+
+    let searchQuery = {
+      $or: [
+        { sender: req.user._id },
+        { recipient: req.user._id },
+      ],
+      text: { $regex: sanitizedQuery, $options: "i" },
+      deletedBy: { $ne: req.user._id },
+    };
+
+    if (conversationId) {
+      searchQuery.conversation = conversationId;
+    }
+
+    const messages = await Messages.find(searchQuery)
+      .populate("sender recipient", "username avatar fullname")
+      .sort("-createdAt")
+      .skip(skip)
+      .limit(limit);
+
+    const total = await Messages.countDocuments(searchQuery);
+
+    logger.info("Messages searched", {
+      query: sanitizedQuery,
+      userId: req.user._id,
+      results: messages.length,
+    });
+
+    res.json({
+      query: sanitizedQuery,
+      messages,
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
+    });
+  }),
 };
 
 module.exports = messageCtrl;

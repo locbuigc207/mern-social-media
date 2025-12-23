@@ -42,8 +42,16 @@ const userSchema = new mongoose.Schema(
       maxlength: 200,
     },
     location: {
-      type: String,
-      default: "",
+      type: {
+        type: String,
+        enum: ["Point"],
+        default: "Point",
+      },
+      coordinates: {
+        type: [Number], // [longitude, latitude]
+      },
+      name: String,
+      address: String,
     },
     role: {
       type: String,
@@ -73,6 +81,7 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    // Relationships
     followers: [
       {
         type: mongoose.Types.ObjectId,
@@ -80,6 +89,24 @@ const userSchema = new mongoose.Schema(
       },
     ],
     following: [
+      {
+        type: mongoose.Types.ObjectId,
+        ref: "user",
+      },
+    ],
+    friends: [
+      {
+        type: mongoose.Types.ObjectId,
+        ref: "user",
+      },
+    ],
+    friendRequests: [
+      {
+        type: mongoose.Types.ObjectId,
+        ref: "user",
+      },
+    ],
+    sentFriendRequests: [
       {
         type: mongoose.Types.ObjectId,
         ref: "user",
@@ -115,6 +142,7 @@ const userSchema = new mongoose.Schema(
         ref: "report",
       },
     ],
+    // Verification
     isVerified: {
       type: Boolean,
       default: false,
@@ -122,7 +150,7 @@ const userSchema = new mongoose.Schema(
     },
     verificationToken: String,
     verificationTokenExpires: Date,
-
+    // Blocking
     isBlocked: {
       type: Boolean,
       default: false,
@@ -134,7 +162,6 @@ const userSchema = new mongoose.Schema(
       ref: "user",
     },
     blockedAt: Date,
-    
     isBanned: {
       type: Boolean,
       default: false,
@@ -142,12 +169,10 @@ const userSchema = new mongoose.Schema(
     },
     bannedReason: String,
     bannedAt: Date,
-    
     suspendedUntil: {
       type: Date,
       index: true,
     },
-    
     blockHistory: [
       {
         blockedAt: {
@@ -174,7 +199,6 @@ const userSchema = new mongoose.Schema(
         },
       },
     ],
-    
     warningCount: {
       type: Number,
       default: 0,
@@ -198,7 +222,7 @@ const userSchema = new mongoose.Schema(
         },
       },
     ],
-    
+    // Password reset
     resetPasswordToken: String,
     resetPasswordExpires: Date,
     resetAttempts: {
@@ -217,6 +241,7 @@ const userSchema = new mongoose.Schema(
       default: 0,
       index: true,
     },
+    // Privacy settings
     privacySettings: {
       profileVisibility: {
         type: String,
@@ -225,17 +250,17 @@ const userSchema = new mongoose.Schema(
       },
       whoCanMessage: {
         type: String,
-        enum: ["everyone", "following", "none"],
+        enum: ["everyone", "following", "friends", "none"],
         default: "everyone",
       },
       whoCanComment: {
         type: String,
-        enum: ["everyone", "following", "none"],
+        enum: ["everyone", "following", "friends", "none"],
         default: "everyone",
       },
       whoCanTag: {
         type: String,
-        enum: ["everyone", "following", "none"],
+        enum: ["everyone", "following", "friends", "none"],
         default: "everyone",
       },
       showFollowers: {
@@ -246,12 +271,80 @@ const userSchema = new mongoose.Schema(
         type: Boolean,
         default: true,
       },
+      showOnlineStatus: {
+        type: Boolean,
+        default: true,
+      },
     },
+    // Notification settings
+    notificationSettings: {
+      emailNotifications: {
+        type: Boolean,
+        default: true,
+      },
+      pushNotifications: {
+        type: Boolean,
+        default: true,
+      },
+      notifyOnLike: {
+        type: Boolean,
+        default: true,
+      },
+      notifyOnComment: {
+        type: Boolean,
+        default: true,
+      },
+      notifyOnFollow: {
+        type: Boolean,
+        default: true,
+      },
+      notifyOnMessage: {
+        type: Boolean,
+        default: true,
+      },
+      notifyOnMention: {
+        type: Boolean,
+        default: true,
+      },
+      notifyOnShare: {
+        type: Boolean,
+        default: true,
+      },
+    },
+    // Account settings
+    accountSettings: {
+      language: {
+        type: String,
+        enum: ["en", "vi", "ja", "ko"],
+        default: "vi",
+      },
+      timezone: {
+        type: String,
+        default: "Asia/Ho_Chi_Minh",
+      },
+    },
+    // Search history
+    searchHistory: [
+      {
+        query: String,
+        timestamp: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
+    // Activity tracking
     lastActive: {
       type: Date,
       default: Date.now,
       index: true,
     },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+    deactivatedAt: Date,
+    // Security
     twoFactorEnabled: {
       type: Boolean,
       default: false,
@@ -273,9 +366,12 @@ const userSchema = new mongoose.Schema(
   }
 );
 
+// Indexes
 userSchema.index({ role: 1, isBlocked: 1 });
 userSchema.index({ followers: 1 });
 userSchema.index({ following: 1 });
+userSchema.index({ friends: 1 });
+userSchema.index({ friendRequests: 1 });
 userSchema.index({ createdAt: -1 });
 userSchema.index({ blockedUsers: 1 });
 userSchema.index({ blockedBy: 1 });
@@ -283,9 +379,10 @@ userSchema.index({ isVerified: 1, isBlocked: 1 });
 userSchema.index({ username: "text", fullname: "text", email: "text" });
 userSchema.index({ role: 1, isBlocked: 1, isVerified: 1 });
 userSchema.index({ lastActive: -1 });
-
 userSchema.index({ isBlocked: 1, isBanned: 1, suspendedUntil: 1 });
+userSchema.index({ "location.coordinates": "2dsphere" });
 
+// Methods
 userSchema.methods.isCurrentlyBlocked = function () {
   if (this.isBanned) return true;
   if (this.isBlocked) return true;
@@ -298,15 +395,15 @@ userSchema.methods.checkAndUnblockIfExpired = async function () {
     this.isBlocked = false;
     this.suspendedUntil = null;
     this.blockedReason = null;
-    
+
     if (this.blockHistory.length > 0) {
       const lastBlock = this.blockHistory[this.blockHistory.length - 1];
       if (!lastBlock.unblockedAt) {
         lastBlock.unblockedAt = new Date();
-        lastBlock.unblockedBy = null; 
+        lastBlock.unblockedBy = null;
       }
     }
-    
+
     await this.save();
     return true;
   }
@@ -318,19 +415,19 @@ userSchema.methods.blockUser = async function (blockedBy, reason, actionTaken, r
   this.blockedReason = reason;
   this.blockedByAdmin = blockedBy;
   this.blockedAt = new Date();
-  
+
   if (actionTaken === "account_banned") {
     this.isBanned = true;
     this.bannedReason = reason;
     this.bannedAt = new Date();
   }
-  
+
   if (duration && actionTaken === "account_suspended") {
     this.suspendedUntil = new Date(Date.now() + duration);
   }
-  
+
   this.tokenVersion = (this.tokenVersion || 0) + 1;
-  
+
   this.blockHistory.push({
     blockedAt: new Date(),
     blockedBy: blockedBy,
@@ -338,7 +435,7 @@ userSchema.methods.blockUser = async function (blockedBy, reason, actionTaken, r
     actionTaken: actionTaken,
     reportId: reportId,
   });
-  
+
   await this.save();
 };
 
@@ -356,21 +453,21 @@ userSchema.methods.unblockUser = async function (unblockedBy) {
       lastBlock.unblockedBy = unblockedBy;
     }
   }
-  
+
   await this.save();
 };
 
 userSchema.methods.addWarning = async function (warnedBy, reason, reportId) {
   this.warningCount = (this.warningCount || 0) + 1;
   this.lastWarningAt = new Date();
-  
+
   this.warnings.push({
     warnedAt: new Date(),
     warnedBy: warnedBy,
     reason: reason,
     reportId: reportId,
   });
-  
+
   await this.save();
 };
 
@@ -384,7 +481,7 @@ userSchema.methods.getBlockStatus = function () {
       canAppeal: true,
     };
   }
-  
+
   if (this.suspendedUntil && this.suspendedUntil > new Date()) {
     return {
       isBlocked: true,
@@ -395,7 +492,7 @@ userSchema.methods.getBlockStatus = function () {
       canAppeal: true,
     };
   }
-  
+
   if (this.isBlocked) {
     return {
       isBlocked: true,
@@ -405,13 +502,12 @@ userSchema.methods.getBlockStatus = function () {
       canAppeal: true,
     };
   }
-  
+
   return {
     isBlocked: false,
     type: null,
   };
 };
-
 
 userSchema.methods.canResetPassword = function () {
   if (this.resetAttempts >= 5) {
@@ -450,6 +546,7 @@ userSchema.methods.updateLastLogin = async function (ip, device) {
   await this.save();
 };
 
+// Pre-save hooks
 userSchema.pre("save", function (next) {
   if (this.isModified("email")) {
     this.email = this.email.toLowerCase();
@@ -460,6 +557,7 @@ userSchema.pre("save", function (next) {
   next();
 });
 
+// Post-save hooks
 userSchema.post("save", function (doc) {
   if (this.isModified("isBlocked") && this.isBlocked) {
     const logger = require("../utils/logger");
@@ -470,18 +568,19 @@ userSchema.post("save", function (doc) {
   }
 });
 
+// Post-find hook for auto-unblock
 userSchema.post("find", async function (docs) {
   if (!docs || docs.length === 0) return;
-  
+
   const now = new Date();
   const toUpdate = docs.filter(
     (doc) => doc.suspendedUntil && doc.suspendedUntil < now && doc.isBlocked
   );
-  
+
   if (toUpdate.length > 0) {
     const logger = require("../utils/logger");
     logger.info(`Auto-unblocking ${toUpdate.length} users with expired suspensions`);
-    
+
     for (const user of toUpdate) {
       await user.checkAndUnblockIfExpired();
     }

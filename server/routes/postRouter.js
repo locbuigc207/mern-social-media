@@ -223,4 +223,11 @@ router.get(
   postCtrl.checkIfShared
 );
 
+router.get(
+  "/post/:id/history",
+  auth,
+  validateObjectId("id"),
+  postCtrl.getPostEditHistory
+);
+
 module.exports = router;

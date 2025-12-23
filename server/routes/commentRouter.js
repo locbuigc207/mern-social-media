@@ -59,4 +59,12 @@ router.patch(
   commentCtrl.hideComment
 );
 
+router.get(
+  "/comment/:commentId/replies",
+  auth,
+  validateObjectId("commentId"),
+  validatePagination,
+  commentCtrl.getCommentReplies
+);
+
 module.exports = router;

@@ -154,4 +154,27 @@ router.delete(
   messageCtrl.removeReaction
 );
 
+router.post(
+  "/message/:messageId/react",
+  auth,
+  validateObjectId("messageId"),
+  interactionLimiter,
+  messageCtrl.reactToMessage
+);
+
+router.delete(
+  "/message/:messageId/react",
+  auth,
+  validateObjectId("messageId"),
+  messageCtrl.removeReaction
+);
+
+router.get(
+  "/messages/search",
+  auth,
+  searchLimiter,
+  validatePagination,
+  messageCtrl.searchMessages
+);
+
 module.exports = router;

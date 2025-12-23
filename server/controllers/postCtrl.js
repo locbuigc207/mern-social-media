@@ -484,33 +484,29 @@ const postCtrl = {
     }
 
     if (existingPost.isShared) {
-      throw new ValidationError(
-        "Cannot edit shared posts. You can only update the share caption."
-      );
+      throw new ValidationError("Cannot edit shared posts.");
     }
+
+    // Save to edit history before updating
+    existingPost.editHistory.push({
+      content: existingPost.content,
+      images: existingPost.images,
+      editedAt: new Date(),
+      editedBy: req.user._id,
+    });
 
     const existingImages = JSON.parse(req.body.existingImages || "[]");
     const finalImages = [...existingImages, ...images];
 
-    if (existingPost.status === "published" && !existingPost.isDraft) {
-      if (
-        finalImages.length === 0 &&
-        (!content || content.trim().length === 0)
-      ) {
-        throw new ValidationError(
-          "Post must have content or at least one image."
-        );
-      }
-    }
+    existingPost.content =
+      content !== undefined ? content : existingPost.content;
+    existingPost.images = finalImages;
+    existingPost.isEdited = true;
+    existingPost.lastEditedAt = new Date();
 
-    const post = await Posts.findByIdAndUpdate(
-      req.params.id,
-      {
-        content: content !== undefined ? content : existingPost.content,
-        images: finalImages,
-      },
-      { new: true }
-    )
+    await existingPost.save();
+
+    const post = await Posts.findById(req.params.id)
       .populate("user likes", "avatar username fullname")
       .populate({
         path: "comments",
@@ -522,12 +518,36 @@ const postCtrl = {
 
     logger.audit("Post updated", req.user._id, {
       postId: req.params.id,
-      newImagesCount: images.length,
+      hasEditHistory: existingPost.editHistory.length,
     });
 
     res.json({
       msg: "Post updated successfully.",
       newPost: post,
+    });
+  }),
+
+  getPostEditHistory: asyncHandler(async (req, res) => {
+    const { id } = req.params;
+
+    const post = await Posts.findById(id)
+      .select("editHistory isEdited lastEditedAt user")
+      .populate("editHistory.editedBy", "username avatar fullname");
+
+    if (!post) {
+      throw new NotFoundError("Post");
+    }
+
+    // Only owner can see edit history
+    if (post.user.toString() !== req.user._id.toString()) {
+      throw new AuthorizationError("Unauthorized.");
+    }
+
+    res.json({
+      postId: post._id,
+      isEdited: post.isEdited,
+      lastEditedAt: post.lastEditedAt,
+      editHistory: post.editHistory,
     });
   }),
 
@@ -599,38 +619,38 @@ const postCtrl = {
   }),
 
   getUserPosts: asyncHandler(async (req, res) => {
-  const features = new APIfeatures(
-    Posts.find({
-      user: req.params.id,
-      status: "published",
-      isDraft: false,
-    }),
-    req.query
-  ).paginating();
+    const features = new APIfeatures(
+      Posts.find({
+        user: req.params.id,
+        status: "published",
+        isDraft: false,
+      }),
+      req.query
+    ).paginating();
 
-  const posts = await features.query
-    .sort("-createdAt")
-    .populate("user", "avatar username fullname")
-    .populate({
-      path: "comments",
-      populate: {
-        path: "user",
-        select: "avatar username fullname"
-      }
-    })
-    .populate({
-      path: "originalPost",
-      populate: {
-        path: "user",
-        select: "avatar username fullname"
-      }
+    const posts = await features.query
+      .sort("-createdAt")
+      .populate("user", "avatar username fullname")
+      .populate({
+        path: "comments",
+        populate: {
+          path: "user",
+          select: "avatar username fullname",
+        },
+      })
+      .populate({
+        path: "originalPost",
+        populate: {
+          path: "user",
+          select: "avatar username fullname",
+        },
+      });
+
+    res.json({
+      posts,
+      result: posts.length,
     });
-
-  res.json({
-    posts,
-    result: posts.length,
-  });
-}),
+  }),
 
   getPost: asyncHandler(async (req, res) => {
     const post = await Posts.findById(req.params.id)
