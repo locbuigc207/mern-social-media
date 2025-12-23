@@ -1,85 +1,238 @@
-Don't forget to star the repo.
-Demo website : https://mern-social-media-sdp.herokuapp.com/
-# mern-social-media-complete-project
-A MERN stack based project on social media application. It is completely working project. Its' completely responsive application.
-MongoDB Express React Redux NodeJs are user in this project.
+# 🌐 IT4409 - Mạng Xã Hội
 
-# Featurs included in this project:
+Ứng dụng mạng xã hội được xây dựng với **MERN Stack** (MongoDB, Express, React, Node.js)
 
-**user features:**
- - register and login users. 
- - post images can be uploaded using camera or file system.
- - pagination on every pages.
- - Dark mode.
- - copy link of post.
- - report post for spam.
- - search other users by username.
- - user suggestions menu. 
- - save any post to collection.
- - saved posts page.
- - delete posts and comments.
- - admin panel is included.
- - Explore page to view other posts by random users.
- - notifications page.
- - profile page.
- - edit profile page user data.
- - password is stored in database in encrypted format with salt.
- - create and edit posts.
- - like ,comment, share and edit posts.
- - posts include text(caption) and image(s).
- - comment on posts.
- - reply comments.
- - like commets.
- - clear notification option.
- - profile page shows user details and posts with following and followers menu.
+## 📋 Tổng quan
 
+| Thành phần | Công nghệ |
+|------------|-----------|
+| **Frontend** | React 19, Vite, Tailwind CSS |
+| **Backend** | Node.js, Express.js |
+| **Database** | MongoDB |
+| **Real-time** | Socket.IO |
+| **Authentication** | JWT (JSON Web Token) |
 
+## 📁 Cấu trúc dự án
 
-   **Admin features:**
-   
+```
+IT4409_Mang_xa_hoi/
+├── src/                    # Frontend React
+│   ├── api/                # API calls
+│   ├── components/         # React components
+│   ├── pages/              # Page components
+│   └── ...
+├── server/                 # Backend Node.js
+│   ├── controllers/        # Business logic
+│   ├── models/             # MongoDB schemas
+│   ├── routes/             # API routes
+│   ├── middleware/         # Auth middleware
+│   └── server.js           # Entry point
+├── package.json            # Frontend dependencies
+└── docker-compose.yml      # Docker configuration
+```
 
- - admin panel shows total number of post ,users,reported posts etc.
- - admin can create or assign other admin accounts.
- - admin can see posts reported by more than specified number of users.
- - admin can delete those reported posts.
+---
 
+## 🚀 Hướng dẫn cài đặt và chạy (Local Development)
 
-**What you need to run this application:**
+### Yêu cầu
 
- - Node 
- - MongoDB or Mongo Atlas
- - Cloudinary account
- - NPM
+- **Node.js** >= 18.x
+- **npm** >= 9.x
+- **Docker Desktop** (để chạy MongoDB)
+- **Git**
 
-**How to run this application**
-1.  Make sure MongoDB is running on your system or online.
-2. include MongoDB database link in .env file.
-3. Add cloudinary data in /client/src/utils/imageUpload.js file.
-4. Clone this repository
-5. Open command line in the cloned folder,
-    - To install dependencies for backend, run  `npm install` in main folder.
-    - To run backend type command `node server` in main folder.
-    - To install dependencies for frontend , run  `npm install` in `/client` folder.
-    - To run frontend type command `npm start` in `/client` folder.
-6.  Open  [localhost:3000](http://localhost:3000/)  in the browser.
- **And application will be up and running.**
-**Here are some images of application:**
-![login page](https://user-images.githubusercontent.com/72184791/114161303-877f6b80-9945-11eb-89a7-f05b560bb5e4.JPG)
+### Bước 1: Clone repository
 
-![admin panel](https://user-images.githubusercontent.com/72184791/114161299-877f6b80-9945-11eb-9791-cab82f92bd7e.JPG)
+```bash
+git clone https://github.com/donglam1824/IT4409_Mang_xa_hoi.git
+cd IT4409_Mang_xa_hoi
+```
 
-![profile page](https://user-images.githubusercontent.com/72184791/114161324-8b12f280-9945-11eb-96a2-0707ee234c8a.JPG)
+### Bước 2: Chạy MongoDB bằng Docker
 
-![home page](https://user-images.githubusercontent.com/72184791/114161305-88180200-9945-11eb-9856-a4b33b8e9def.JPG)
-![new post](https://user-images.githubusercontent.com/72184791/114161309-89492f00-9945-11eb-888f-3ff263cfb909.JPG)
+```bash
+# Chạy MongoDB container (lần đầu)
+docker run -d --name mongodb -p 27017:27017 mongo:7.0
 
-![dark mode](https://user-images.githubusercontent.com/72184791/114161287-851d1180-9945-11eb-8a0e-1a4c56132de0.JPG)
+# Kiểm tra MongoDB đang chạy
+docker ps
+```
 
-![search users](https://user-images.githubusercontent.com/72184791/114161296-86e6d500-9945-11eb-85cb-eb7c84d4abda.JPG)
+> **Lưu ý:** Các lần sau chỉ cần `docker start mongodb`
 
-![posts menu](https://user-images.githubusercontent.com/72184791/114161315-89e1c580-9945-11eb-8f9f-4156d1184567.JPG)
+### Bước 3: Cấu hình môi trường
 
-![explore page](https://user-images.githubusercontent.com/72184791/114161321-8a7a5c00-9945-11eb-8c67-bf42a8f30fcd.JPG)
+**Tạo file `.env` trong thư mục gốc:**
 
+```env
+VITE_API_URL=http://localhost:4000
+VITE_APP_NAME=MySocialApp
+```
 
+**Tạo file `.env` trong thư mục `server/`:**
 
+```env
+MONGODB_URL=mongodb://localhost:27017/social_network
+ACCESS_TOKEN_SECRET=your_access_token_secret_here
+REFRESH_TOKEN_SECRET=your_refresh_token_secret_here
+PORT=4000
+CLIENT_URL=http://localhost:3000
+MAIL_SERVICE=gmail
+EMAIL_USERNAME=your_gmail
+EMAIL_PASSWORD=your_app_password
+```
+
+> **Tạo SECRET KEY:**
+> ```bash
+> node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+> ```
+
+### Bước 4: Cài đặt dependencies
+
+```bash
+# Cài đặt frontend
+npm install
+
+# Cài đặt backend
+cd server
+npm install
+cd ..
+```
+
+### Bước 5: Chạy ứng dụng
+
+**Mở 2 terminal riêng biệt:**
+
+**Terminal 1 - Backend:**
+```bash
+cd server
+npm run dev
+```
+→ Backend chạy tại: **http://localhost:4000**
+
+**Terminal 2 - Frontend:**
+```bash
+npm run dev
+```
+→ Frontend chạy tại: **http://localhost:3000**
+
+---
+
+## 🐳 Chạy với Docker Compose (Full Stack)
+
+```bash
+# Chạy tất cả services (MongoDB + Backend + Frontend)
+docker-compose up --build
+
+# Chạy ở background
+docker-compose up -d --build
+
+# Dừng services
+docker-compose down
+```
+
+**URLs:**
+- Frontend: http://localhost:3000
+- Backend API: http://localhost:4000/api
+- MongoDB: mongodb://localhost:27017
+
+---
+
+## 📡 API Endpoints
+
+### Authentication
+| Method | Endpoint | Mô tả |
+|--------|----------|-------|
+| POST | `/api/register` | Đăng ký tài khoản |
+| POST | `/api/login` | Đăng nhập |
+| POST | `/api/logout` | Đăng xuất |
+| POST | `/api/refresh_token` | Làm mới token |
+
+### Users
+| Method | Endpoint | Mô tả |
+|--------|----------|-------|
+| GET | `/api/user/:id` | Lấy thông tin user |
+| PATCH | `/api/user` | Cập nhật profile |
+| GET | `/api/search` | Tìm kiếm user |
+| PATCH | `/api/user/:id/follow` | Follow user |
+| PATCH | `/api/user/:id/unfollow` | Unfollow user |
+
+### Posts
+| Method | Endpoint | Mô tả |
+|--------|----------|-------|
+| GET | `/api/posts` | Lấy danh sách posts |
+| POST | `/api/posts` | Tạo post mới |
+| GET | `/api/post/:id` | Lấy chi tiết post |
+| PATCH | `/api/post/:id` | Cập nhật post |
+| DELETE | `/api/post/:id` | Xóa post |
+| PATCH | `/api/post/:id/like` | Like post |
+| PATCH | `/api/post/:id/unlike` | Unlike post |
+
+### Comments
+| Method | Endpoint | Mô tả |
+|--------|----------|-------|
+| POST | `/api/comment` | Tạo comment |
+| PATCH | `/api/comment/:id` | Sửa comment |
+| DELETE | `/api/comment/:id` | Xóa comment |
+
+---
+
+## ❗ Xử lý lỗi thường gặp
+
+### 1. Lỗi kết nối MongoDB
+```
+MongooseServerSelectionError: connect ECONNREFUSED 127.0.0.1:27017
+```
+**Giải pháp:** Chạy MongoDB container
+```bash
+docker start mongodb
+# hoặc nếu chưa có
+docker run -d --name mongodb -p 27017:27017 mongo:7.0
+```
+
+### 2. Lỗi CORS
+```
+Access to fetch blocked by CORS policy
+```
+**Giải pháp:** Kiểm tra `server/server.js` - đảm bảo origin frontend được cho phép
+
+### 3. Lỗi "Failed to fetch"
+**Giải pháp:**
+- Kiểm tra backend đang chạy: `http://localhost:4000/api`
+- Kiểm tra `VITE_API_URL` trong file `.env`
+
+### 4. Port 3000 bị chiếm
+**Giải pháp:**
+```bash
+# Tìm process đang dùng port 3000
+netstat -ano | findstr :3000
+
+# Kill process (thay PID bằng số từ lệnh trên)
+taskkill /PID <PID> /F
+```
+
+---
+
+## 🔐 Bảo mật
+
+- ❌ **KHÔNG commit** file `.env` lên Git
+- ✅ Sử dụng `.env.example` làm template
+- ✅ Tạo SECRET KEY riêng cho mỗi môi trường
+- ✅ Thay đổi SECRET KEY định kỳ
+
+---
+
+## 👥 Đóng góp
+
+1. Fork repository
+2. Tạo branch mới: `git checkout -b feature/TenTinhNang`
+3. Commit changes: `git commit -m "Add: Tính năng mới"`
+4. Push branch: `git push origin feature/TenTinhNang`
+5. Tạo Pull Request
+
+---
+
+## 📄 License
+
+MIT License - Xem file [LICENSE](LICENSE) để biết thêm chi tiết.
