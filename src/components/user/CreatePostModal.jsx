@@ -1,12 +1,12 @@
-import { useState, useEffect } from "react";
-import { createPost } from "../../api/post";
+// src/components/user/CreatePostModal.jsx (Enhanced)
+import { useState, useEffect, useRef } from "react";
+import { createPost, saveDraft, schedulePost } from "../../api/post";
 import {
   FiImage,
-  FiSmile,
-  FiMapPin,
   FiX,
-  FiVideo,
-  FiGlobe,
+  FiClock,
+  FiSave,
+  FiCalendar,
 } from "react-icons/fi";
 import { toast } from "react-hot-toast";
 
@@ -16,13 +16,53 @@ export default function CreatePostModal({
   onNewPost,
   currentUser,
   initialType = "text",
+  draftData = null, // For editing existing draft
 }) {
   const [content, setContent] = useState("");
-  const [images, setImages] = useState([]); // Lưu File Object
-  const [previews, setPreviews] = useState([]); // Lưu URL Preview (để hiển thị)
+  const [images, setImages] = useState([]);
+  const [previews, setPreviews] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [showSchedule, setShowSchedule] = useState(false);
+  const [scheduleDate, setScheduleDate] = useState("");
+  const [scheduleTime, setScheduleTime] = useState("");
+  
+  const fileInputRef = useRef(null);
+  const autoSaveTimer = useRef(null);
 
-  // Clean up URL blob khi đóng modal hoặc unmount
+  // Load draft data if editing
+  useEffect(() => {
+    if (draftData) {
+      setContent(draftData.content || "");
+      if (draftData.images) {
+        setPreviews(draftData.images.map(img => img.url));
+      }
+    }
+  }, [draftData]);
+
+  // Auto-save draft every 30 seconds
+  useEffect(() => {
+    if (!isOpen || !content.trim()) return;
+
+    autoSaveTimer.current = setInterval(async () => {
+      try {
+        const formData = new FormData();
+        formData.append("content", content);
+        images.forEach((img) => formData.append("files", img));
+
+        await saveDraft(formData);
+        toast.success("Đã tự động lưu nháp", { duration: 1000 });
+      } catch (err) {
+        console.error("Auto-save failed:", err);
+      }
+    }, 30000); // 30 seconds
+
+    return () => {
+      if (autoSaveTimer.current) {
+        clearInterval(autoSaveTimer.current);
+      }
+    };
+  }, [isOpen, content, images]);
+
   useEffect(() => {
     return () => {
       previews.forEach((url) => URL.revokeObjectURL(url));
@@ -38,10 +78,7 @@ export default function CreatePostModal({
       return;
     }
 
-    // 1. Lưu File Object
     setImages((prev) => [...prev, ...files]);
-
-    // 2. Tạo Preview URL
     const newPreviews = files.map((file) => URL.createObjectURL(file));
     setPreviews((prev) => [...prev, ...newPreviews]);
   };
@@ -52,61 +89,80 @@ export default function CreatePostModal({
     setPreviews((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const handleSubmit = async () => {
+  const handleSaveDraft = async () => {
     if (!content.trim() && images.length === 0) {
-      console.warn("Không có nội dung để đăng");
+      toast.error("Nội dung trống không thể lưu");
       return;
     }
 
     setLoading(true);
     try {
-      // Dùng FormData để gửi file
       const formData = new FormData();
       formData.append("content", content);
+      images.forEach((img) => formData.append("files", img));
 
-      // Append từng file ảnh vào key "files"
-      images.forEach((img) => {
-        formData.append("files", img);
-      });
+      await saveDraft(formData);
+      toast.success("Đã lưu nháp!");
+      handleClose();
+    } catch (err) {
+      toast.error(err.message || "Lưu nháp thất bại");
+    } finally {
+      setLoading(false);
+    }
+  };
 
-      // 🔍 DEBUG: Soi dữ liệu trong FormData trước khi gửi
-      console.group(" Đang gửi dữ liệu...");
-      for (let pair of formData.entries()) {
-        console.log(`Key: ${pair[0]}, Value:`, pair[1]);
-      }
-      console.groupEnd();
+  const handleSchedulePost = async () => {
+    if (!scheduleDate || !scheduleTime) {
+      toast.error("Vui lòng chọn ngày giờ đăng bài");
+      return;
+    }
+
+    const scheduledAt = new Date(`${scheduleDate}T${scheduleTime}`);
+    const now = new Date();
+
+    if (scheduledAt <= now) {
+      toast.error("Thời gian phải ở tương lai");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append("content", content);
+      formData.append("scheduledAt", scheduledAt.toISOString());
+      images.forEach((img) => formData.append("files", img));
+
+      await schedulePost(formData);
+      toast.success("Đã lên lịch đăng bài!");
+      handleClose();
+    } catch (err) {
+      toast.error(err.message || "Lên lịch thất bại");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmit = async () => {
+    if (!content.trim() && images.length === 0) {
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append("content", content);
+      images.forEach((img) => formData.append("files", img));
 
       const res = await createPost(formData);
-      console.log(" API Phản hồi:", res);
       const finalPost = res.newPost || res.post || res.data?.newPost;
 
       if (finalPost) {
         toast.success("Đăng bài thành công!");
-        onNewPost?.(finalPost); // Gửi dữ liệu chuẩn về HomePage
+        onNewPost?.(finalPost);
         handleClose();
-      } else {
-        throw new Error("Không tìm thấy dữ liệu bài viết trong phản hồi API");
       }
     } catch (err) {
-      console.error(" LỖI GẶP PHẢI:", err);
-
-      let message = "Đăng bài thất bại";
-
-      if (err.response) {
-        // Lỗi từ Server trả về (400, 404, 500)
-        console.error("Response Status:", err.response.status);
-        console.error("Response Data:", err.response.data);
-        message =
-          err.response.data?.msg || `Lỗi Server (${err.response.status})`;
-      } else if (err.request) {
-        // Lỗi không gọi được server (Mạng, Sai URL)
-        console.error("Request Error:", err.request);
-        message = "Không kết nối được Server. Kiểm tra Backend.";
-      } else {
-        // Lỗi code frontend
-        message = err.message;
-      }
-      toast.error(message);
+      toast.error(err.message || "Đăng bài thất bại");
     } finally {
       setLoading(false);
     }
@@ -116,6 +172,9 @@ export default function CreatePostModal({
     setContent("");
     setImages([]);
     setPreviews([]);
+    setShowSchedule(false);
+    setScheduleDate("");
+    setScheduleTime("");
     onClose();
   };
 
@@ -163,7 +222,7 @@ export default function CreatePostModal({
 
           {/* Image Previews */}
           {previews.length > 0 && (
-            <div className="grid grid-cols-2 gap-2 mt-4 border rounded-lg p-2 relative">
+            <div className="grid grid-cols-2 gap-2 mt-4 border rounded-lg p-2">
               {previews.map((src, i) => (
                 <div key={i} className="relative group">
                   <img
@@ -182,6 +241,41 @@ export default function CreatePostModal({
             </div>
           )}
 
+          {/* Schedule Options */}
+          {showSchedule && (
+            <div className="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
+              <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                <FiCalendar className="text-blue-600" />
+                Lên lịch đăng bài
+              </h3>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Ngày
+                  </label>
+                  <input
+                    type="date"
+                    value={scheduleDate}
+                    onChange={(e) => setScheduleDate(e.target.value)}
+                    min={new Date().toISOString().split('T')[0]}
+                    className="w-full px-3 py-2 border rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Giờ
+                  </label>
+                  <input
+                    type="time"
+                    value={scheduleTime}
+                    onChange={(e) => setScheduleTime(e.target.value)}
+                    className="w-full px-3 py-2 border rounded-lg"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Actions */}
           <div className="flex items-center justify-between mt-4 px-4 py-3 border border-gray-200 rounded-lg shadow-sm">
             <div className="flex gap-2">
@@ -192,32 +286,51 @@ export default function CreatePostModal({
                   accept="image/*, video/*"
                   multiple
                   className="hidden"
+                  ref={fileInputRef}
                   onChange={handleImageChange}
                 />
               </label>
-              <button className="p-2 hover:bg-gray-100 rounded-full transition">
-                <FiMapPin className="text-red-500 text-2xl" />
-              </button>
-              <button className="p-2 hover:bg-gray-100 rounded-full transition">
-                <FiSmile className="text-yellow-500 text-2xl" />
+              
+              <button
+                onClick={() => setShowSchedule(!showSchedule)}
+                className="p-2 hover:bg-gray-100 rounded-full transition"
+              >
+                <FiClock className={`text-2xl ${showSchedule ? 'text-blue-500' : 'text-gray-500'}`} />
               </button>
             </div>
           </div>
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t shrink-0">
-          <button
-            onClick={handleSubmit}
-            disabled={loading || (!content.trim() && images.length === 0)}
-            className={`w-full py-2.5 rounded-lg font-bold text-white transition-all ${
-              loading || (!content.trim() && images.length === 0)
-                ? "bg-gray-300 cursor-not-allowed"
-                : "bg-blue-600 hover:bg-blue-700 shadow-md"
-            }`}
-          >
-            {loading ? "Đang đăng..." : "Đăng"}
-          </button>
+        <div className="p-4 border-t shrink-0 space-y-2">
+          {showSchedule ? (
+            <button
+              onClick={handleSchedulePost}
+              disabled={loading || (!content.trim() && images.length === 0)}
+              className="w-full py-2.5 rounded-lg font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 transition"
+            >
+              {loading ? "Đang xử lý..." : "Lên lịch đăng"}
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={handleSubmit}
+                disabled={loading || (!content.trim() && images.length === 0)}
+                className="w-full py-2.5 rounded-lg font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 transition"
+              >
+                {loading ? "Đang đăng..." : "Đăng"}
+              </button>
+              
+              <button
+                onClick={handleSaveDraft}
+                disabled={loading}
+                className="w-full py-2.5 rounded-lg font-bold text-gray-700 bg-gray-100 hover:bg-gray-200 disabled:opacity-50 transition flex items-center justify-center gap-2"
+              >
+                <FiSave />
+                Lưu nháp
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
