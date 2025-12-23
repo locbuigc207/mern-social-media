@@ -4,7 +4,7 @@ const commentCtrl = require("../controllers/commentCtrl");
 const { validate } = require("../middleware/validate");
 const commentSchemas = require("../schemas/commentSchema");
 const validateObjectId = require("../middleware/validateObjectId");
-const { rateLimitByUser } = require("../middleware/validation");
+const { rateLimitByUser, validatePagination } = require("../middleware/validation");
 
 router.post(
   "/comment",

@@ -3,8 +3,13 @@ const fsSync = require('fs');
 const path = require('path');
 
 const logsDir = path.join(__dirname, '../logs');
-if (!fsSync.existsSync(logsDir)) {
-  fsSync.mkdirSync(logsDir, { recursive: true });
+
+try {
+  if (!fsSync.existsSync(logsDir)) {
+    fsSync.mkdirSync(logsDir, { recursive: true });
+  }
+} catch (error) {
+  console.error('Failed to create logs directory:', error);
 }
 
 const MAX_LOG_SIZE = 10 * 1024 * 1024;
